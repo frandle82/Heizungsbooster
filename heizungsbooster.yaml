@@ -1,0 +1,921 @@
+substitutions:
+  # -----------------------
+  # Geräte-Identifikation
+  # -----------------------
+  device_name: heizungsbooster                   # Name des Geräts (z.B. "heizungsbooster")
+  device_friendly_name: Heizungsbooster          # Anzeige-Name des Geräts (z.B. "Heizungsbooster")  
+
+  # -----------------------
+  # Sicherheit & Netzwerk
+  # -----------------------
+  api_encryption_key: !secret api_encryption_key # API Encryption Key (z.B. "base64_encrypted_key_hier_eintragen==")
+  ota_password: !secret ota_password             # Passwort für den OTA Update (z.B. "InM2TlqVfJe4")
+  ap_ssid: ${device_name}_AP                     # SSID für den Access Point (z.B. "shys-heizungsbooster_AP")
+  ap_password: !secret ap_password               # Passwort für den Access Point (z.B. "InM2TlqVfJe4")
+
+  # -----------------------
+  # Lüfter Konfiguration
+  # -----------------------
+  pin_fan: GPIO13                                # Pin für Lüfter PWM Steuersignal
+  fan_pwm_frequency: 25000 Hz                    # 4-Pol PC-Lüfter: 25000Hz // 3-Pol Lüfter mit Mosfet Schaltung: 1000Hz (bei Problemen 500-3000Hz testen)
+
+  # ---------------------------------
+  # Temperatur-Sensor Konfiguration
+  # ---------------------------------
+  heizung1_temp_entity: "climate.wohnzimmer_heizung_links"
+  heizung2_temp_entity: "climate.wohnzimmer_heizung_rechts"
+  heizung1_valve: "sensor.wohnzimmer_heizung_links_level"
+  heizung2_valve: "sensor.wohnzimmer_heizung_rechts_level"
+  steuerung_temp_entity: "climate.wohnzimmer"
+  raum_temp_entity: "sensor.wohnzimmer_temp_temperature"
+
+  # -----------------------
+  # Standardwerte (Initial Values)
+  # -----------------------
+  initial_k_factor: "6.0"
+  initial_deadband: "0.5"
+  initial_fully_open_temp: "2.0"
+  initial_temp_threshold: "3.0"                       # Temperaturdifferenz zwischen Heizung und Raum, ab der der Lüfter eingeschaltet wird (z.B. 3°C)
+  initial_default_raum_temp: "21.0"                   # Fallback-Wert wenn kein Wert von HA oder DS18B20 verfügbar ist
+  initial_man_fan_speed: "50.0"                       # Manuelle Lüftergeschwindigkeit (für MANUAL-Modus)
+
+  #------------------------
+  # Steuerungswerte
+  #------------------------
+
+  k_min: "2.0"
+  k_max: "15.0"
+
+  morning_start_hour: "5"
+  morning_end_hour: "12"
+  morning_k_start: "5.5"          # Start-k für Warm-up
+  morning_boost_minutes: "35"     # Dauer des aggressiveren Warm-ups
+
+  k_step_normal: "0.15"
+  k_step_morning: "0.70"
+  heat_rate_slow: "0.15"
+  heat_rate_fast: "0.45"
+
+  # Kennlinie Heizbetrieb: ΔT-Stützpunkte (°C) und Speed (%)
+  heat_dt0: "0.3"   # unterhalb davon: aus (kalt/ineffizient)
+  heat_dt1: "0.8"
+  heat_dt2: "2.0"
+  heat_dt3: "4.1"
+  heat_dt4: "6.0"
+
+  heat_s0: "0"
+  heat_s1: "22"     # psycho LOW
+  heat_s2: "38"     # MID
+  heat_s3: "55"     # HIGH
+  heat_s4: "70"     # gedeckeltes MAX
+
+  # Plateau/Abflachung ab Ts+dead: deutlich flacher (leiser)
+  plat_dt1: "0.5"
+  plat_dt2: "2.0"
+  plat_dt3: "5.0"
+
+  plat_s1: "22"
+  plat_s2: "38"
+  plat_s3: "55"
+
+  tune_min_speed: "22.0"        # nur tunen, wenn Lüfter wirklich läuft
+  tune_delta_band: "0.3"        # ΔT muss stabil sein (±0.3K)
+  tune_room_gain_min: "0.05"    # Tr muss in 10 min mind. 0.05K steigen, sonst "bringt nichts"
+
+  tune_step_down: "0.03"
+  tune_step_up: "0.01"
+
+  plateau_cap_min: "0.30"
+  plateau_cap_max: "0.55"
+
+  afterrun_cap_min: "0.30"
+  afterrun_cap_max: "0.55"
+
+  # -----------------------
+  # Lern- & Regelparameter
+  # -----------------------
+  learn_dt_ms: "180000"          # 3 min Lernintervall (schneller wegen guter Zirkulation)
+
+  plateau_delta_span: "3.0"      # ΔT-Spanne für Abflachung
+  plateau_cap_factor: "0.55"     # max. Anteil von vmax im Plateau
+  afterrun_cap_factor: "0.45"    # max. Anteil von vmax im Nachlauf
+
+  # -----------------------
+  # Timing
+  # -----------------------
+  automatik_interval: 20s       # Intervall für die automatische Steuerung (z.B. 10s)
+  lern_interval: 5min           # Intervall für die k-Steuerung (z.B. 5min)
+  tune_interval: 10min          # Auswertefenster
+  sensor_update_interval: 9s    # Sollte etwas kürzer sein als automatik_interval
+
+  # --------------------------------------------------------------------------------------------
+  # --------------------------------------------------------------------------------------------
+  # Konfiguration ENDE
+  # --------------------------------------------------------------------------------------------
+  # --------------------------------------------------------------------------------------------
+
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${device_friendly_name}
+
+esp32:
+  board: nodemcu-32s
+  framework:
+    type: arduino
+
+logger:
+
+api:
+  encryption:
+    key: ${api_encryption_key}
+
+ota:
+  - platform: esphome
+    password: ${ota_password}
+  
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: ${ap_ssid}
+    password: ${ap_password}
+
+captive_portal:
+
+web_server:
+  port: 80
+  include_internal: false
+  log: false
+
+globals:
+  - id: current_state
+    type: int
+    restore_value: no
+    initial_value: '0'   # 0=idle,1=heating,2=transition,3=afterrun
+
+  - id: delta_char
+    type: float
+    restore_value: yes
+    initial_value: '3.5'   # Startwert für hohen Wohnraum
+
+  - id: psycho_speed_filt
+    type: float
+    restore_value: no
+    initial_value: '0'
+
+  - id: last_speed
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  - id: k_dyn
+    type: float
+    restore_value: yes
+    initial_value: ${initial_k_factor}
+
+  - id: warmup_until_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  - id: was_heating_request
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  - id: plateau_cap_dyn
+    type: float
+    restore_value: yes
+    initial_value: '0.55'   # Start: wohnzimmertauglich, P8 MAX effizient
+
+  - id: afterrun_cap_dyn
+    type: float
+    restore_value: yes
+    initial_value: '0.45'   # Start: leiser Nachlauf
+
+  - id: last_tune_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  - id: tune_base_Tr
+    type: float
+    restore_value: no
+    initial_value: 'NAN'
+
+  - id: tune_base_delta
+    type: float
+    restore_value: no
+    initial_value: 'NAN'
+
+  - id: tune_base_speed
+    type: float
+    restore_value: no
+    initial_value: 'NAN'
+
+  - id: fan_on_since
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  - id: last_heat_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  - id: proxy_active_glob
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  - id: proxy_on_glob
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  
+switch:
+  - platform: restart
+    name: Neustart
+    id: reboot
+
+fan:
+  - platform: speed
+    output: pwm_output
+    name: "Ventilator"
+    id: heizung_luefter
+    speed_count: 100
+    restore_mode: ALWAYS_OFF
+
+output:
+  - platform: ledc
+    frequency: ${fan_pwm_frequency}
+    pin: ${pin_fan}
+    id: pwm_output
+
+interval:
+  # Automatik-Steuerung
+  - interval: ${automatik_interval}
+    then:
+      - script.execute: automatik_steuerung
+  - interval: ${lern_interval}
+    then:
+      - script.execute: lernmodus_k_factor
+  - interval: ${tune_interval}
+    then:
+      - script.execute: autotune_plateau_caps
+
+text_sensor:
+  - platform: template
+    name: "Heizungsbooster Status"
+    id: booster_state
+  - platform: template
+    name: "k-Faktor-Anpassung"
+    id: lernen
+  - platform: template
+    name: "Heizungsbooster Diagnose"
+    id: booster_diag
+  - platform: homeassistant
+    id: hvac_action
+    entity_id: ${steuerung_temp_entity}
+    attribute: hvac_action
+
+binary_sensor:
+  - platform: homeassistant
+    name: "Fenster Status"
+    entity_id: ${steuerung_temp_entity}
+    attribute: window_open
+    id: fenster_status
+    on_state:
+      - script.execute: automatik_steuerung
+
+  - platform: homeassistant
+    id: call_for_heat
+    entity_id: ${steuerung_temp_entity}
+    attribute: call_for_heat
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+sensor:
+  - platform: template
+    name: "Luefterleistung"
+    id: luefterleistung
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: never
+
+  - platform: dht
+    pin: GPIO23
+    temperature:
+      name: "Heizung Konvektions-Proxy"
+      id: heizung_surface
+      filters:
+        # DHT ist träge & verrauscht → starkes Glätten
+        - sliding_window_moving_average:
+            window_size: 5
+            send_every: 1
+        # unrealistische Werte blockieren
+        - lambda: |-
+            if (x < 15.0 || x > 80.0) return NAN;
+            return x;
+    update_interval: 60s
+    
+  # Temperatur-Sensor Heizung1
+  - platform: homeassistant
+    name: "Heizkörper1 Temperatur"
+    entity_id: ${heizung1_temp_entity}
+    attribute: current_temperature
+    internal: true
+    id: heizung1_temp
+
+  # Temperatur-Sensor Heizung2
+  - platform: homeassistant
+    name: "Heizkörper2 Temperatur"
+    entity_id: ${heizung2_temp_entity}
+    attribute: current_temperature
+    internal: true
+    id: heizung2_temp
+
+  - platform: homeassistant
+    id: valve_left
+    entity_id: ${heizung1_valve}
+    internal: true
+    accuracy_decimals: 0
+
+  - platform: homeassistant
+    id: valve_right
+    entity_id: ${heizung2_valve}
+    internal: true
+    accuracy_decimals: 0
+
+  # eingestellte Raumtemperatur
+  - platform: homeassistant
+    name: "Solltemperatur"
+    entity_id: ${steuerung_temp_entity}
+    attribute: temperature
+    id: steuerung_temp
+
+  # Raumtemperatur-Sensor aus HA
+  - platform: homeassistant
+    name: "Raumtemperatur"
+    entity_id: ${raum_temp_entity}
+    id: raum_temp
+
+  - platform: template
+    name: "Heizungstemperatur"
+    id: heizung_temp
+    update_interval: ${sensor_update_interval}
+    accuracy_decimals: 1
+    unit_of_measurement: "°C"
+    lambda: |-
+      float h1 = id(heizung1_temp).state;
+      float h2 = id(heizung2_temp).state;
+      if (isnan(h1)) return h2;
+      if (isnan(h2)) return h1;
+      return (h1 > h2) ? h1 : h2;
+
+
+number:
+  - platform: template
+    name: "Deadband"
+    id: deadband_val
+    min_value: 0.0
+    max_value: 2.0
+    step: 0.1
+    initial_value: ${initial_deadband}
+    optimistic: true
+    restore_value: true
+    on_value:
+      - script.execute: automatik_steuerung
+
+  - platform: template
+    name: "Hysterese"
+    id: temp_threshold
+    min_value: 0.0
+    max_value: 2.0
+    step: 0.1
+    initial_value: ${initial_fully_open_temp}
+    optimistic: true
+    restore_value: true
+    on_value:
+      - script.execute: automatik_steuerung
+
+  # Manuelle Lüftergeschwindigkeit (für MANUAL-Modus)
+  - platform: template
+    name: "man Lueftergeschwindigkeit"
+    id: man_fan_speed
+    min_value: 0.0
+    max_value: 100.0
+    step: 10.0
+    initial_value: ${initial_man_fan_speed}
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          std::string mode = id(fan_mode).current_option();
+          if (mode == "manual") {
+            // MANUAL: Auf manuelle Geschwindigkeit setzen
+            id(apply_man_fan_speed).execute();
+
+          } else if (mode == "auto") {
+            // AUTO: Automatik-Logik ausführen
+            id(automatik_steuerung).execute();
+          }
+
+select:
+  # Interner Select für Betriebsmodus
+  - platform: template
+    id: fan_mode
+    name: "Betriebsmodus"
+    internal: false
+    options:
+      - "off"
+      - "manual"
+      - "auto"
+    initial_option: "auto"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          std::string mode = id(fan_mode).current_option();
+
+          if (mode == "off") {
+            // OFF: Lüfter ausschalten
+            auto call = id(heizung_luefter).turn_off();
+            call.perform();
+
+          } else if (mode == "manual") {
+            // MANUAL: Auf manuelle Geschwindigkeit setzen
+            id(apply_man_fan_speed).execute();
+
+          } else if (mode == "auto") {
+            // AUTO: Automatik-Logik ausführen
+            id(automatik_steuerung).execute();
+          }
+
+script:
+  # Lüftergeschwindigkeit vom Number in den Fan übernehmen (nur im MANUAL-Modus)
+  - id: apply_man_fan_speed
+    then:
+      - lambda: |-
+          std::string mode = id(fan_mode).current_option();
+          if (mode != "manual") return;
+
+          int speed_value = (int)id(man_fan_speed).state;
+
+          if (speed_value < 1) {
+            id(heizung_luefter).turn_off().perform();
+          } else {
+            auto call = id(heizung_luefter).turn_on();
+            call.set_speed(speed_value);
+            call.perform();
+          }
+
+  # Betriebsmodus wechseln: off -> manual -> auto -> off
+  - id: switch_mode
+    then:
+      - lambda: |-
+          std::string current_mode = id(fan_mode).current_option();
+          std::string new_mode;
+
+          if (current_mode == "off") new_mode = "manual";
+          else if (current_mode == "manual") new_mode = "auto";
+          else new_mode = "off";
+
+          id(fan_mode).publish_state(new_mode);
+
+  # Manuelle Geschwindigkeit in 25% Stufen ändern
+  - id: adjust_manual_speed
+    then:
+      - lambda: |-
+          std::string mode = id(fan_mode).current_option();
+          if (mode != "manual") return;
+
+          float current_speed = id(man_fan_speed).state;
+          float new_speed;
+
+          if (current_speed < 12.5) new_speed = 25.0;
+          else if (current_speed < 37.5) new_speed = 50.0;
+          else if (current_speed < 62.5) new_speed = 75.0;
+          else if (current_speed < 87.5) new_speed = 100.0;
+          else new_speed = 0.0;
+
+          id(man_fan_speed).publish_state(new_speed);
+
+  # Automatik-Steuerung
+  - id: automatik_steuerung
+    then:
+      - lambda: |-
+          /* =========================================================
+             MODUS & SICHERHEIT
+          ========================================================= */
+          if (id(fan_mode).current_option() != "auto") return;
+
+          if (id(fenster_status).state) {
+            id(heizung_luefter).turn_off().perform();
+            id(current_state) = 0;
+            id(booster_state).publish_state("Fenster offen");
+            id(booster_diag).publish_state("OFF: window");
+            return;
+          }
+
+          if (!id(raum_temp).has_state() || !id(heizung_temp).has_state()) return;
+
+          float Tr = id(raum_temp).state;
+          float Th = id(heizung_temp).state;
+          if (isnan(Tr) || isnan(Th)) return;
+
+          float delta = Th - Tr;
+
+          float Ts   = id(steuerung_temp).has_state() ? id(steuerung_temp).state : Tr;
+          float dead = id(deadband_val).state;
+          float hyst = id(temp_threshold).state;
+
+          /* =========================================================
+             VENTILLOGIK (2 HEIZKÖRPER) + PLAUSIBILITÄT
+          ========================================================= */
+          float vL = id(valve_left).has_state()  ? id(valve_left).state  : -1.0f;
+          float vR = id(valve_right).has_state() ? id(valve_right).state : -1.0f;
+
+          bool valve_valid =
+            id(valve_left).has_state() &&
+            id(valve_right).has_state() &&
+            (vL >= 0.0f && vL <= 100.0f) &&
+            (vR >= 0.0f && vR <= 100.0f);
+
+          if (!valve_valid) {
+            id(heizung_luefter).turn_off().perform();
+            id(current_state) = 0;
+            id(booster_state).publish_state("Ventil ungültig");
+            id(booster_diag).publish_state("FAULT: valve invalid");
+            return;
+          }
+
+          float valve_mean = 0.5f * (vL + vR);
+          bool valve_any_open = (vL > 10.0f) || (vR > 10.0f);
+
+          /* =========================================================
+             ZUSTÄNDE
+          ========================================================= */
+          bool heating_request = id(call_for_heat).state;
+
+          // "Maximal ausnutzen": wenn unter Soll -> mindestens LOW unterstützen (Failsafe)
+          bool under_setpoint = (Tr < Ts - dead);
+
+          // Plateau früher erlauben (ruhiger am Soll)
+          bool near_setpoint = (Tr >= (Ts - 0.5f * dead));
+
+          bool heating_active =
+            heating_request &&
+            valve_any_open &&
+            !near_setpoint;
+
+          bool plateau_ok =
+            heating_request &&
+            valve_any_open &&
+            near_setpoint;
+
+          // Optional: hvac_action als zusätzliche Heizinformation
+          bool hvac_reports_heat = false;
+          if (id(hvac_action).has_state()) {
+            hvac_reports_heat = (id(hvac_action).state == "heating");
+          }
+
+          // Zeitfenster "war kürzlich heizen"
+          uint32_t now = millis();
+          bool recently_heating = (id(last_heat_ms) > 0) && ((now - id(last_heat_ms)) < (15u * 60u * 1000u));
+
+          /* =========================================================
+             ADAPTIVE PROXY-LOGIK (DHT als Konvektionsindikator)
+          ========================================================= */
+          bool proxy_valid = id(heizung_surface).has_state() && !isnan(id(heizung_surface).state);
+          float Tproxy = proxy_valid ? id(heizung_surface).state : NAN;
+          float delta_proxy = proxy_valid ? (Tproxy - Tr) : NAN;
+
+          float proxy_on_th, proxy_off_th;
+          if (delta >= 3.0f)      { proxy_on_th = 0.6f; proxy_off_th = 0.4f; }
+          else if (delta >= 2.0f) { proxy_on_th = 0.8f; proxy_off_th = 0.6f; }
+          else if (delta >= 1.0f) { proxy_on_th = 1.0f; proxy_off_th = 0.8f; }
+          else                   { proxy_on_th = 1.2f; proxy_off_th = 1.0f; }
+
+          if (!id(proxy_on_glob)) {
+            if (proxy_valid && delta_proxy >= proxy_on_th) id(proxy_on_glob) = true;
+          } else {
+            if (!proxy_valid || delta_proxy <= proxy_off_th) id(proxy_on_glob) = false;
+          }
+
+          // Restwärme nur, wenn wirklich noch Konvektion erkennbar und kürzlich geheizt wurde
+          bool restwaerme =
+            !valve_any_open &&
+            (Th > Tr + dead + hyst) &&
+            id(proxy_on_glob) &&
+            (recently_heating || hvac_reports_heat);
+
+          /* =========================================================
+             PARAMETER
+          ========================================================= */
+          float k = std::clamp(id(k_dyn), (float)${k_min}, (float)${k_max});
+          float vmax = id(man_fan_speed).state;
+
+          /* =========================================================
+             KENNLINE – HILFSFUNKTIONEN
+          ========================================================= */
+          auto lerp = [](float a, float b, float t) {
+            return a + (b - a) * t;
+          };
+          auto clamp01 = [](float x) {
+            return std::clamp(x, 0.0f, 1.0f);
+          };
+
+          auto piecewise = [&](float x) {
+            if (x <= ${heat_dt0}) return (float)${heat_s0};
+            if (x <= ${heat_dt1}) return lerp(${heat_s0}, ${heat_s1}, (x - ${heat_dt0}) / (${heat_dt1} - ${heat_dt0}));
+            if (x <= ${heat_dt2}) return lerp(${heat_s1}, ${heat_s2}, (x - ${heat_dt1}) / (${heat_dt2} - ${heat_dt1}));
+            if (x <= ${heat_dt3}) return lerp(${heat_s2}, ${heat_s3}, (x - ${heat_dt2}) / (${heat_dt3} - ${heat_dt2}));
+            if (x <= ${heat_dt4}) return lerp(${heat_s3}, ${heat_s4}, (x - ${heat_dt3}) / (${heat_dt4} - ${heat_dt3}));
+            return (float)${heat_s4};
+          };
+
+          /* =========================================================
+             LÜFTERBERECHNUNG
+          ========================================================= */
+          int speed = 0;
+
+          // 0) FAILSAFE: Wenn wirklich geheizt wird und Raum deutlich unter Soll ist -> mindestens LOW,
+          //    damit Wärme "vollständig" in den Raum gebracht wird.
+          if (heating_request && valve_any_open && under_setpoint && delta >= 0.5f) {
+            speed = 22;           // psycho LOW
+            id(current_state) = 1;
+          }
+
+          /* ---- 1) HEIZBETRIEB ---- */
+          if (heating_active && delta >= 0.3f) {
+            id(current_state) = 1;
+            id(last_heat_ms) = millis();
+
+            float base = piecewise(delta);
+
+            // Proxy beeinflusst: HIGH nur bei starkem Proxy (Effizienzschutz),
+            // aber LOW/MID sind erlaubt, damit es wirklich warm wird.
+            if (!id(proxy_on_glob) && base > 55.0f) base = 55.0f;  // HIGH nur mit Proxy
+
+            if (proxy_valid && (delta_proxy < (proxy_on_th + 0.15f)) && base > 55.0f) base = 55.0f;
+
+            // Ventilskalierung (Leistungsfreigabe)
+            float valve_scale = std::clamp(valve_mean / 100.0f, 0.3f, 1.0f);
+            base *= valve_scale;
+
+            // k wirkt nur weich
+            float kf = 0.9f + 0.35f * clamp01((k-${k_min})/(${k_max}-${k_min}));
+            base *= kf;
+
+            // Raum deutlich unter Soll -> Bandbreite stärker nutzen
+            if (Tr < Ts - 1.0f) {
+              base = std::min(base * 1.15f, 70.0f);
+            }
+
+            // Früher LOW-Boost
+            if (valve_any_open && delta < 0.8f) base = std::max(base, 22.0f);
+
+            // Falls FAILSAFE schon 22 gesetzt hat: nicht runterregeln
+            if (speed == 22) base = std::max(base, 22.0f);
+
+            speed = (int)roundf(std::clamp(base, 0.0f, 100.0f));
+          }
+
+          /* ---- 2) PLATEAU ---- */
+          else if (plateau_ok && delta >= 0.3f) {
+            id(current_state) = 3;
+
+            float base = lerp(22.0f, 38.0f,
+              clamp01((delta - 0.5f) / ${plateau_delta_span})
+            );
+
+            base = std::min(base, vmax * id(plateau_cap_dyn));
+            speed = (int)roundf(base);
+          }
+
+          /* ---- 3) NACHLAUF ---- */
+          else if (restwaerme && delta >= 0.3f) {
+            id(current_state) = 3;
+
+            float rest = Th - (Tr + dead + hyst);
+            float rest_n = clamp01(rest / std::max(hyst, 0.1f));
+
+            float base = lerp(22.0f, 38.0f, rest_n);
+            base = std::min(base, vmax * id(afterrun_cap_dyn));
+
+            speed = (int)roundf(base);
+          }
+
+          /* ---- 4) AUS (mit Mindestlaufzeit) ---- */
+          else {
+            uint32_t now2 = millis();
+
+            if (id(last_speed) <= 0) {
+              id(heizung_luefter).turn_off().perform();
+              id(current_state) = 0;
+              id(booster_state).publish_state("Aus");
+              id(booster_diag).publish_state("OFF");
+              return;
+            }
+
+            if (now2 - id(fan_on_since) < 120000UL) {
+              speed = 22;
+              id(current_state) = 3;
+            } else {
+              id(heizung_luefter).turn_off().perform();
+              id(current_state) = 0;
+              id(booster_state).publish_state("Aus");
+              id(booster_diag).publish_state("OFF");
+              return;
+            }
+          }
+
+          /* =========================================================
+             PSYCHOAKUSTIK (P8 MAX)
+          ========================================================= */
+          auto quant = [&](int s) {
+            if (s < 15) return 0;
+            if (s < 30) return 22;
+            if (s < 45) return 38;
+            if (s < 60) return 55;
+            return 70;
+          };
+
+          const int RAMP_UP = 12;
+          const int RAMP_DOWN = 3;
+          const float ALPHA = 0.10f;
+
+          speed = quant(speed);
+
+          if (id(last_speed) <= 0 && speed > 0) {
+            id(fan_on_since) = millis();
+          }
+
+          if (speed > id(last_speed))
+            speed = std::min(speed, id(last_speed) + RAMP_UP);
+          else
+            speed = std::max(speed, id(last_speed) - RAMP_DOWN);
+
+          id(psycho_speed_filt) =
+            id(psycho_speed_filt) * (1.0f - ALPHA) + speed * ALPHA;
+
+          speed = (int)roundf(id(psycho_speed_filt));
+
+          if (speed <= 0) {
+            id(heizung_luefter).turn_off().perform();
+          } else {
+            id(heizung_luefter).turn_on().set_speed(speed).perform();
+          }
+          id(last_speed) = speed;
+          id(luefterleistung).publish_state(speed);
+
+          /* =========================================================
+             DIAGNOSE
+          ========================================================= */
+          char buf[160];
+          snprintf(buf, sizeof(buf),
+            "ΔT=%.1fK | Th=%.1f Tr=%.1f Ts=%.1f | V=%.0f/%.0f%% | proxy=%.1fK(%s) | k=%.2f%s | Fan=%d%%",
+            delta, Th, Tr, Ts, vL, vR,
+            (proxy_valid ? delta_proxy : NAN),
+            (id(proxy_on_glob) ? "ON" : "OFF"),
+            k, (k >= ${k_max}-0.1f ? " (SAT)" : ""),
+            speed
+          );
+          id(booster_diag).publish_state(buf);
+
+          id(booster_state).publish_state(
+            id(current_state)==1 ? "Heizen" :
+            id(current_state)==3 ? "Abflachung/Nachlauf" :
+            "Aus"
+          );
+
+  # Lernmodus k-Faktor
+  - id: lernmodus_k_factor
+    then:
+      - lambda: |-
+          static float Tr_ref = NAN;
+          static uint32_t t_ref = 0;
+
+          if (id(fan_mode).current_option() != "auto") return;
+          if (!id(raum_temp).has_state() || !id(heizung_temp).has_state()) return;
+
+          float Tr = id(raum_temp).state;
+          float Th = id(heizung_temp).state;
+          float Ts = id(steuerung_temp).state;
+          float dead = id(deadband_val).state;
+
+          float vL = id(valve_left).has_state() ? id(valve_left).state : 0.0f;
+          float vR = id(valve_right).has_state() ? id(valve_right).state : 0.0f;
+          bool valve_any_open = (vL > 10.0f) || (vR > 10.0f);
+
+          if (!id(call_for_heat).state) return;
+          if (!valve_any_open) return;
+          if (Tr >= Ts + dead) return;
+          if (Th < Tr + 0.8f) return;
+
+          uint32_t now = millis();
+          if (isnan(Tr_ref)) {
+            Tr_ref = Tr;
+            t_ref = now;
+            return;
+          }
+
+          uint32_t dt = now - t_ref;
+          if (dt < 600000UL) return;
+
+          float dTr = Tr - Tr_ref;
+          float rate_10 = dTr * (600000.0f / dt);
+
+          float k = id(k_dyn);
+          float step = ${k_step_normal};
+
+          if (rate_10 < ${heat_rate_slow})
+            k = std::min((float)${k_max}, k + step);
+          else if (rate_10 > ${heat_rate_fast})
+            k = std::max((float)${k_min}, k - step);
+
+          id(k_dyn) = k;
+
+          Tr_ref = Tr;
+          t_ref = now;
+
+  # Autotune Plateau/Nachlauf Caps
+  - id: autotune_plateau_caps
+    then:
+      - lambda: |-
+          if (id(fan_mode).current_option() != "auto") return;
+          if (id(fenster_status).state) return;
+
+          if (!id(raum_temp).has_state() || !id(heizung_temp).has_state()) return;
+
+          float Tr = id(raum_temp).state;
+          float Th = id(heizung_temp).state;
+          if (isnan(Tr) || isnan(Th)) return;
+
+          float delta = Th - Tr;
+
+          float Ts = id(steuerung_temp).has_state() ? id(steuerung_temp).state : Tr;
+          float dead = id(deadband_val).state;
+          float hyst = id(temp_threshold).state;
+
+          float vL = id(valve_left).has_state() ? id(valve_left).state : 0.0f;
+          float vR = id(valve_right).has_state() ? id(valve_right).state : 0.0f;
+          bool valve_any_open = (vL > 10.0f) || (vR > 10.0f);
+
+          // nur tunen, wenn überhaupt Energiefluss möglich
+          if (!valve_any_open && (Th < Tr + 3.0f)) return;
+
+          bool in_plateau = (Tr >= Ts + dead) && (Th > (Tr + dead));
+          bool in_afterrun = (Th > (Tr + dead + hyst));
+
+          if (!in_plateau && !in_afterrun) {
+            id(tune_base_Tr) = Tr;
+            id(tune_base_delta) = delta;
+            id(tune_base_speed) = (float)id(last_speed);
+            return;
+          }
+
+          if ((float)id(last_speed) < (float)${tune_min_speed}) {
+            id(tune_base_Tr) = Tr;
+            id(tune_base_delta) = delta;
+            id(tune_base_speed) = (float)id(last_speed);
+            return;
+          }
+
+          if (isnan(id(tune_base_Tr)) || isnan(id(tune_base_delta)) || isnan(id(tune_base_speed))) {
+            id(tune_base_Tr) = Tr;
+            id(tune_base_delta) = delta;
+            id(tune_base_speed) = (float)id(last_speed);
+            return;
+          }
+
+          float d_delta = fabsf(delta - id(tune_base_delta));
+          if (d_delta > (float)${tune_delta_band}) {
+            id(tune_base_Tr) = Tr;
+            id(tune_base_delta) = delta;
+            id(tune_base_speed) = (float)id(last_speed);
+            return;
+          }
+
+          float dTr = Tr - id(tune_base_Tr);
+
+          if (dTr < (float)${tune_room_gain_min}) {
+            id(plateau_cap_dyn) = std::max((float)${plateau_cap_min},
+                                           id(plateau_cap_dyn) - (float)${tune_step_down});
+            id(afterrun_cap_dyn) = std::max((float)${afterrun_cap_min},
+                                            id(afterrun_cap_dyn) - (float)${tune_step_down});
+            id(lernen).publish_state("AutoTune: Caps ↓ (geringer Raumgewinn)");
+          } else {
+            id(plateau_cap_dyn) = std::min((float)${plateau_cap_max},
+                                           id(plateau_cap_dyn) + (float)${tune_step_up});
+            id(lernen).publish_state("AutoTune: PlateauCap ↑ (guter Raumgewinn)");
+          }
+
+          id(tune_base_Tr) = Tr;
+          id(tune_base_delta) = delta;
+          id(tune_base_speed) = (float)id(last_speed);
