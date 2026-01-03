@@ -11,162 +11,57 @@
 <body>
 
 <div class="wrap">
-
-  <!-- ===== HEADER ===== -->
-  <div class="top">
+  <header class="top">
     <div>
       <div class="title">Heizungsbooster</div>
       <div class="sub">Verbinde…</div>
     </div>
-
     <div class="seg">
       <button class="segbtn" data-mode="off">AUS</button>
       <button class="segbtn" data-mode="manual">MANUELL</button>
       <button class="segbtn" data-mode="auto">AUTO</button>
     </div>
-  </div>
+    </header>
 
-  <!-- ===== OFF ===== -->
-  <div id="view-off" class="panel hidden">
-    <p>Booster ist ausgeschaltet.</p>
-  </div>
+  <main>
+    <section id="status" class="card">
+      <div class="label">Status</div>
+      <div id="statusText" class="value">—</div>
+    </section>
 
-  <!-- ===== MANUELL ===== -->
-  <div id="view-manual" class="panel hidden">
-
-    <div class="grid">
-
-      <!-- Lüfter aktuell -->
-      <div class="circle">
-        <svg viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="45"
-                  stroke="rgba(255,255,255,.25)"
-                  stroke-width="4"
-                  fill="none"/>
-        </svg>
-
-        <div class="circle-content">
-          <div class="circle-label">Lüfter</div>
-          <div class="circle-value">
-            <span id="mFanNow">—</span><span class="circle-unit">%</span>
-          </div>
-        </div>
+    <section id="delta-eta" class="card">
+      <div class="label">Zielabweichung</div>
+      <div class="delta-block">
+        <div id="delta" class="delta-value">—</div>
+        <div id="eta" class="eta-text">—</div>
       </div>
+    </section>
 
-      <!-- Lüfter Ziel -->
-      <div class="circle">
-        <svg viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="45"
-                  stroke="rgba(74,163,255,.7)"
-                  stroke-width="4"
-                  fill="none"/>
-        </svg>
-
-        <div class="circle-content">
-          <div class="circle-label">Ziel</div>
-          <div class="circle-value">
-            <span id="mFanTarget">—</span><span class="circle-unit">%</span>
-          </div>
-        </div>
+    <section id="temps" class="card">
+      <div class="label">Temperaturen</div>
+      <div class="pair">
+        <span id="room">Raum — °C</span>
+        <span id="setp">Soll — °C</span>
       </div>
+    </section>
 
-    </div>
-
-    <div class="slider">
-      <input id="manualSlider" type="range" min="0" max="100" step="25">
-      <div class="ticks"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
-    </div>
-
-  </div>
-
-  <!-- ===== AUTO ===== -->
-  <div id="view-auto" class="panel hidden">
-
-    <div class="grid">
-
-      <!-- Raum -->
-      <div class="circle">
-        <svg viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="45"
-                  stroke="var(--good)"
-                  stroke-width="4"
-                  fill="none"/>
-        </svg>
-
-        <div class="circle-content">
-          <div class="circle-label">Raum</div>
-          <div class="circle-value">
-            <span id="aRoom">—</span><span class="circle-unit">°C</span>
-          </div>
-        </div>
+    <section id="fan" class="card">
+      <div class="label">Lüfter</div>
+      <div id="fanValue" class="value">— %</div>
+      <div class="slider" id="manualSliderWrap">
+        <input id="manualSlider" type="range" min="0" max="100" step="25">
+        <div class="ticks"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
       </div>
+    </section>
 
-      <!-- Soll -->
-      <div class="circle">
-        <svg viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="45"
-                  stroke="var(--good)"
-                  stroke-width="4"
-                  fill="none"/>
-        </svg>
-
-        <div class="circle-content">
-          <div class="circle-label">Soll</div>
-          <div class="circle-value">
-            <span id="aSet">—</span><span class="circle-unit">°C</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Delta -->
-      <div class="circle" id="a-delta">
-        <svg viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="45"
-                  stroke="var(--warn)"
-                  stroke-width="4"
-                  fill="none"/>
-        </svg>
-
-        <div class="circle-content">
-          <div class="circle-label">Δ</div>
-          <div class="circle-value">
-            <span id="aDelta">—</span><span class="circle-unit">°C</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Lüfter -->
-      <div class="circle">
-        <svg viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="45"
-                  stroke="var(--warn)"
-                  stroke-width="4"
-                  fill="none"/>
-        </svg>
-
-        <div class="circle-content">
-          <div class="circle-label">Lüfter</div>
-          <div class="circle-value">
-            <span id="aFan">—</span><span class="circle-unit">%</span>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- k-Faktor -->
-    <div class="krow">
-      <div class="kchip">
-        k-Faktor: <strong id="kVal">—</strong>
-      </div>
-      <div class="kchip">
-        Auswertung:
-        <strong id="kEval">—</strong>
-      </div>
-    </div>
-
-  </div>
-
+    <div id="diagToggle" class="diag-toggle"></div>
+    <section id="diagnostics" class="card diag-panel" hidden>
+      <div>Heizung: <span id="diagHeater">—</span></div>
+      <div>Proxy: <span id="diagProxy">—</span></div>
+      <div>Fan intern: <span id="diagFan">—</span></div>
+      <div>Regelzustand: <span id="diagState">—</span></div>
+    </section>
+  </main>
 </div>
 
 <script src="app.js?v=4"></script>
