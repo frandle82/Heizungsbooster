@@ -472,6 +472,7 @@ script:
             auto call = id(heizung_luefter).turn_on();
             call.set_speed(speed_value);
             call.perform();
+            id(luefterleistung).publish_state(speed_value);
           }
 
   # Betriebsmodus wechseln: off -> manual -> auto -> off
