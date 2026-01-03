@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Heizungsbooster</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Cache-Busting -->
+  <link rel="stylesheet" href="style.css?v=4">
+</head>
+<body>
+
+<div class="wrap">
+
+  <!-- ===== HEADER ===== -->
+  <div class="top">
+    <div>
+      <div class="title">Heizungsbooster</div>
+      <div class="sub">Verbinde…</div>
+    </div>
+
+    <div class="seg">
+      <button class="segbtn" data-mode="off">AUS</button>
+      <button class="segbtn" data-mode="manual">MANUELL</button>
+      <button class="segbtn" data-mode="auto">AUTO</button>
+    </div>
+  </div>
+
+  <!-- ===== OFF ===== -->
+  <div id="view-off" class="panel hidden">
+    <p>Booster ist ausgeschaltet.</p>
+  </div>
+
+  <!-- ===== MANUELL ===== -->
+  <div id="view-manual" class="panel hidden">
+
+    <div class="grid">
+
+      <!-- Lüfter aktuell -->
+      <div class="circle">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="45"
+                  stroke="rgba(255,255,255,.25)"
+                  stroke-width="4"
+                  fill="none"/>
+        </svg>
+
+        <div class="circle-content">
+          <div class="circle-label">Lüfter</div>
+          <div class="circle-value">
+            <span id="mFanNow">—</span><span class="circle-unit">%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lüfter Ziel -->
+      <div class="circle">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="45"
+                  stroke="rgba(74,163,255,.7)"
+                  stroke-width="4"
+                  fill="none"/>
+        </svg>
+
+        <div class="circle-content">
+          <div class="circle-label">Ziel</div>
+          <div class="circle-value">
+            <span id="mFanTarget">—</span><span class="circle-unit">%</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="slider">
+      <input id="manualSlider" type="range" min="0" max="100" step="25">
+      <div class="ticks"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
+    </div>
+
+  </div>
+
+  <!-- ===== AUTO ===== -->
+  <div id="view-auto" class="panel hidden">
+
+    <div class="grid">
+
+      <!-- Raum -->
+      <div class="circle">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="45"
+                  stroke="var(--good)"
+                  stroke-width="4"
+                  fill="none"/>
+        </svg>
+
+        <div class="circle-content">
+          <div class="circle-label">Raum</div>
+          <div class="circle-value">
+            <span id="aRoom">—</span><span class="circle-unit">°C</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Soll -->
+      <div class="circle">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="45"
+                  stroke="var(--good)"
+                  stroke-width="4"
+                  fill="none"/>
+        </svg>
+
+        <div class="circle-content">
+          <div class="circle-label">Soll</div>
+          <div class="circle-value">
+            <span id="aSet">—</span><span class="circle-unit">°C</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Delta -->
+      <div class="circle" id="a-delta">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="45"
+                  stroke="var(--warn)"
+                  stroke-width="4"
+                  fill="none"/>
+        </svg>
+
+        <div class="circle-content">
+          <div class="circle-label">Δ</div>
+          <div class="circle-value">
+            <span id="aDelta">—</span><span class="circle-unit">°C</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lüfter -->
+      <div class="circle">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="45"
+                  stroke="var(--warn)"
+                  stroke-width="4"
+                  fill="none"/>
+        </svg>
+
+        <div class="circle-content">
+          <div class="circle-label">Lüfter</div>
+          <div class="circle-value">
+            <span id="aFan">—</span><span class="circle-unit">%</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- k-Faktor -->
+    <div class="krow">
+      <div class="kchip">
+        k-Faktor: <strong id="kVal">—</strong>
+      </div>
+      <div class="kchip">
+        Auswertung:
+        <strong id="kEval">—</strong>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<script src="app.js?v=4"></script>
+</body>
+</html>
