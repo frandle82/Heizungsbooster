@@ -22,7 +22,9 @@ var IDS = {
   room:   "raumtemperatur",               // sensor
   setp:   "solltemperatur",               // sensor
   fan:    "luefterleistung",              // sensor
-  ktxt:   "k-faktor-anpassung"             // text_sensor
+  ktxt:   "k-faktor-anpassung",            // text_sensor
+  heater: "heizungstemperatur",            // sensor (optional)
+  proxy:  "heizung_konvektions-proxy"      // sensor (optional)
 };
 
 /* ========= STATE ========= */
@@ -33,6 +35,8 @@ var state = {
   setp: NaN,
   fan:  NaN,
   manual: NaN,
+  heater: NaN,
+  proxy: NaN,
   ktxt: "—",
   connected: false
 };
@@ -56,9 +60,117 @@ function fmt0(x) {
   return isFinite(x) ? Math.round(x) : "—";
 }
 
+function clamp(x, min, max) {
+  return Math.min(max, Math.max(min, x));
+}
+
+function readNumberResponse(r) {
+  if (!r) return NaN;
+  if (r.state != null) return num(r.state);
+  if (r.value != null) return num(r.value);
+  return NaN;
+}
+
+function readTextResponse(r) {
+  if (!r) return "—";
+  if (r.state != null) return r.state;
+  if (r.value != null) return r.value;
+  return "—";
+}
+
+function deltaColor(delta) {
+  if (!isFinite(delta)) return "rgba(255,255,255,.25)";
+
+  if (delta >= 0) return "#2ee59d";
+  if (delta <= -1.5) return "#ff5d5d";
+  if (delta <= -0.5) return "#ffd166";
+
+  return "#2ee59d";
+}
+
+function fmtSigned(x) {
+  if (!isFinite(x)) return "—";
+  var sign = x > 0 ? "+" : "";
+  return sign + x.toFixed(1);
+}
+
+function computeEffectiveRate(roomHistory, heaterHistory, fan) {
+  if (roomHistory.length < 2) return NaN;
+
+  var first = roomHistory[0];
+  var last = roomHistory[roomHistory.length - 1];
+  var dt = (last.t - first.t) / 60000;
+  if (dt <= 0) return NaN;
+
+  var rateRoom = (last.v - first.v) / dt;
+  var heaterTemp = heaterHistory.length ? heaterHistory[heaterHistory.length - 1].v : NaN;
+  var heatSupport = isFinite(heaterTemp) ? clamp((heaterTemp - last.v) / 20, 0, 1) : 0;
+  var fanFactor = 0.5 + (isFinite(fan) ? fan : 0) / 200;
+
+  return rateRoom * fanFactor * (1 + heatSupport);
+}
+
+function estimateETA(room, setp, rate) {
+  if (!isFinite(rate) || rate <= 0) return NaN;
+  var remaining = setp - room;
+  if (remaining <= 0) return 0;
+  return remaining / rate;
+}
+
+function updateETAUI(text, color) {
+  var etaEl = $("eta");
+  if (etaEl) {
+    var content = text || "";
+    etaEl.textContent = content;
+    etaEl.style.color = color ? color : "var(--muted)";
+    etaEl.style.display = content ? "" : "none";
+  }
+}
+
+function computeStatus(mode, delta, fan) {
+  if (mode === "off") return "Ausgeschaltet";
+  if (mode === "manual") return "Manueller Betrieb";
+
+  if (fan > 0 && delta < -1.5) return "Heizt stark";
+  if (fan > 0 && delta < -0.5) return "Heizt";
+  if (fan > 0 && delta >= -0.5) return "Hält Temperatur";
+  if (fan === 0 && delta >= 0) return "Ziel erreicht";
+  if (fan === 0 && delta < -0.5) return "Wartet auf Wärme";
+
+  return "Bereit";
+}
+
+var tempHistory = [];
+var heaterHistory = [];
+
+function updateHistory(history, value, now, minDelta) {
+  if (!isFinite(value)) return;
+
+  if (history.length) {
+    var last = history[history.length - 1];
+    if (Math.abs(value - last.v) < minDelta) return;
+  }
+
+  history.push({ t: now, v: value });
+  if (history.length > 10) history.shift();
+}
+
+function heaterIsRising(history) {
+  if (history.length < 2) return false;
+  var last = history[history.length - 1];
+  var prev = history[history.length - 2];
+  return last.v > prev.v;
+}
+
 /* ========= RENDER ========= */
 
 function render() {
+  var now = Date.now();
+  updateHistory(tempHistory, state.room, now, 0.05);
+
+  var heaterValue = isFinite(state.heater) ? state.heater : state.proxy;
+  updateHistory(heaterHistory, heaterValue, now, 0.1);
+
   // Verbindung
   var sub = document.querySelector(".sub");
   if (sub) sub.textContent = state.connected ? "Live verbunden" : "Verbinde…";
@@ -69,43 +181,114 @@ function render() {
     btns[i].classList.toggle("active", btns[i].dataset.mode === state.mode);
   }
 
-  // Views
-  if ($("view-off"))    $("view-off").classList.toggle("hidden", state.mode !== "off");
-  if ($("view-manual")) $("view-manual").classList.toggle("hidden", state.mode !== "manual");
-  if ($("view-auto"))   $("view-auto").classList.toggle("hidden", state.mode !== "auto");
-
   // MANUELL
-  if ($("mFanNow"))    $("mFanNow").textContent    = fmt0(state.fan);
-  if ($("mFanTarget")) $("mFanTarget").textContent = fmt0(state.manual);
-  if ($("manualSlider") && isFinite(state.manual)) {
-    $("manualSlider").value = state.manual;
+  if ($("manualSlider")) {
+    if (isFinite(state.manual)) {
+      $("manualSlider").value = state.manual;
+    }
   }
 
-  // AUTO
-  if ($("aRoom")) $("aRoom").textContent = fmt1(state.room);
-  if ($("aSet"))  $("aSet").textContent  = fmt1(state.setp);
-  if ($("aFan"))  $("aFan").textContent  = fmt0(state.fan);
-
-  // Δ berechnen
+  // Δ berechnen (Raum - Soll)
   var delta = (isFinite(state.setp) && isFinite(state.room))
     ? (state.room - state.setp)
     : NaN;
 
-  if ($("aDelta")) $("aDelta").textContent = fmt1(delta);
+  var deltaText = fmtSigned(delta) + " °C";
+  var deltaEl = $("delta");
+  if (deltaEl) {
+    deltaEl.textContent = deltaText;
+    deltaEl.style.color = deltaColor(delta);
+  }
 
-  // Δ-Farbklasse
-  var dc = $("a-delta");
-  if (dc) {
-    dc.classList.remove("good", "warn", "bad");
-    if (!isFinite(delta))      dc.classList.add("warn");
-    else if (delta <= 0.2)     dc.classList.add("good");
-    else if (delta <= 1.0)     dc.classList.add("warn");
-    else                       dc.classList.add("bad");
+  var roomEl = $("room");
+  if (roomEl) roomEl.textContent = "Raum " + fmt1(state.room) + " °C";
+
+  var setpEl = $("setp");
+  if (setpEl) setpEl.textContent = "Soll " + fmt1(state.setp) + " °C";
+
+  var fanEl = $("fanValue");
+  if (fanEl) {
+    if (isFinite(state.fan)) {
+      fanEl.textContent = fmt0(state.fan) + " %";
+    } else {
+      fanEl.textContent = "—";
+    }
   }
 
   // k-Faktor / Auswertung
-  if ($("kVal"))  $("kVal").textContent  = state.ktxt;
-  if ($("kEval")) $("kEval").textContent = state.ktxt;
+  var statusText = computeStatus(state.mode, delta, state.fan);
+  var statusEl = $("statusText");
+  if (statusEl) statusEl.textContent = statusText;
+
+  var statusCard = $("status");
+  if (statusCard) {
+    var statusColor = deltaColor(delta);
+    if (state.mode === "off") statusColor = "var(--off)";
+    if (state.mode === "manual") statusColor = "var(--manual)";
+    statusCard.style.background = statusColor;
+  }
+
+  var fanBlock = $("fan");
+  if (fanBlock) {
+    fanBlock.style.display = state.mode === "off" ? "none" : "";
+  }
+
+  var sliderWrap = $("manualSliderWrap");
+  if (sliderWrap) {
+    sliderWrap.style.display = state.mode === "manual" ? "" : "none";
+  }
+
+  var diagHeater = $("diagHeater");
+  if (diagHeater) diagHeater.textContent = fmt1(state.heater) + " °C";
+  var diagProxy = $("diagProxy");
+  if (diagProxy) {
+    var proxyDiff = isFinite(state.proxy) && isFinite(state.room) ? (state.proxy - state.room) : NaN;
+    diagProxy.textContent = (isFinite(proxyDiff) ? fmtSigned(proxyDiff) : "—") + " °C";
+  }
+  var diagFan = $("diagFan");
+  if (diagFan) diagFan.textContent = fmt0(state.fan) + " %";
+  var diagState = $("diagState");
+  if (diagState) diagState.textContent = state.ktxt;
+
+  // ETA
+  if (state.mode !== "auto" || !isFinite(delta) || delta >= 0) {
+    updateETAUI("", null);
+    return;
+  }
+
+  var heaterTemp = heaterHistory.length ? heaterHistory[heaterHistory.length - 1].v : NaN;
+  var heaterRising = heaterIsRising(heaterHistory);
+  var proxyWarm = isFinite(state.proxy) && isFinite(state.room) && state.proxy > state.room + 0.8;
+
+  if (isFinite(heaterTemp) && heaterTemp < state.room) {
+    updateETAUI("", null);
+    return;
+  }
+
+  if (!heaterRising && !proxyWarm) {
+    updateETAUI("", null);
+    return;
+  }
+
+  if (!isFinite(state.fan) || state.fan === 0) {
+    updateETAUI("", NaN, null);
+    return;
+  }
+
+  var effectiveRate = computeEffectiveRate(tempHistory, heaterHistory, state.fan);
+  if (!isFinite(effectiveRate) || effectiveRate <= 0) {
+    updateETAUI("", NaN, null);
+    return;
+  }
+
+  var etaMinutes = estimateETA(state.room, state.setp, effectiveRate);
+  if (!isFinite(etaMinutes)) {
+    updateETAUI("", NaN, null);
+    return;
+  }
+
+  var etaText = "≈ " + Math.round(etaMinutes) + " min bis Ziel";
+  updateETAUI(etaText, deltaColor(delta));
 }
 
 /* ========= REST ========= */
@@ -147,6 +330,12 @@ function applyEvent(o) {
   else if (id === "sensor-" + IDS.fan) {
     state.fan = num(s);
   }
+  else if (id === "sensor-" + IDS.heater) {
+    state.heater = num(s);
+  }
+  else if (id === "sensor-" + IDS.proxy) {
+    state.proxy = num(s);
+  }
   else if (id === "text_sensor-" + IDS.ktxt) {
     state.ktxt = s || "—";
   }
@@ -166,14 +355,18 @@ function startPollingFallback() {
       restGet("sensor", IDS.room).catch(() => null),
       restGet("sensor", IDS.setp).catch(() => null),
       restGet("sensor", IDS.fan).catch(() => null),
+      restGet("sensor", IDS.heater).catch(() => null),
+      restGet("sensor", IDS.proxy).catch(() => null),
       restGet("text_sensor", IDS.ktxt).catch(() => null)
     ]).then(function (r) {
       if (r[0] && r[0].state) state.mode   = r[0].state;
-      if (r[1] && r[1].value != null) state.manual = r[1].value;
-      if (r[2] && r[2].value != null) state.room   = r[2].value;
-      if (r[3] && r[3].value != null) state.setp   = r[3].value;
-      if (r[4] && r[4].value != null) state.fan    = r[4].value;
-      if (r[5] && r[5].state != null) state.ktxt   = r[5].state;
+      state.manual = readNumberResponse(r[1]);
+      state.room   = readNumberResponse(r[2]);
+      state.setp   = readNumberResponse(r[3]);
+      state.fan    = readNumberResponse(r[4]);
+      state.heater = readNumberResponse(r[5]);
+      state.proxy  = readNumberResponse(r[6]);
+      state.ktxt   = readTextResponse(r[7]);
 
       state.connected = true;
       render();
@@ -216,6 +409,22 @@ function startEvents() {
 /* ========= INIT ========= */
 
 function init() {
+  var diagToggle = $("diagToggle");
+  var diagPanel = $("diagnostics");
+  if (diagToggle && diagPanel) {
+    diagToggle.textContent = "▼";
+    diagToggle.addEventListener("click", function () {
+      var isHidden = diagPanel.hasAttribute("hidden");
+      if (isHidden) {
+        diagPanel.removeAttribute("hidden");
+        diagToggle.textContent = "▲";
+      } else {
+        diagPanel.setAttribute("hidden", "");
+        diagToggle.textContent = "▼";
+      }
+    });
+  }
+
   // Modus wechseln
   var btns = document.querySelectorAll(".segbtn");
   for (var i = 0; i < btns.length; i++) {
@@ -238,14 +447,18 @@ function init() {
     restGet("sensor", IDS.room),
     restGet("sensor", IDS.setp),
     restGet("sensor", IDS.fan),
+    restGet("sensor", IDS.heater),
+    restGet("sensor", IDS.proxy),
     restGet("text_sensor", IDS.ktxt)
   ]).then(function (r) {
     state.mode   = r[0].state || "off";
-    state.manual= r[1].value;
-    state.room  = r[2].value;
-    state.setp  = r[3].value;
-    state.fan   = r[4].value;
-    state.ktxt  = r[5].state || "—";
+    state.manual= readNumberResponse(r[1]);
+    state.room  = readNumberResponse(r[2]);
+    state.setp  = readNumberResponse(r[3]);
+    state.fan   = readNumberResponse(r[4]);
+    state.heater = readNumberResponse(r[5]);
+    state.proxy  = readNumberResponse(r[6]);
+    state.ktxt  = readTextResponse(r[7]);
     state.connected = true;
     render();
   }).catch(function () {
