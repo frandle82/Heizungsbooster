@@ -33,6 +33,8 @@ cards:
         card:
           type: custom:button-card
           name: AUS
+          hold_action: none
+          double_tap_action: none
           tap_action:
             action: call-service
             service: select.select_option
@@ -63,6 +65,8 @@ cards:
         card:
           type: custom:button-card
           name: MANUELL
+          hold_action: none
+          double_tap_action: none
           tap_action:
             action: call-service
             service: select.select_option
@@ -93,6 +97,8 @@ cards:
         card:
           type: custom:button-card
           name: AUTO
+          hold_action: none
+          double_tap_action: none
           tap_action:
             action: call-service
             service: select.select_option
@@ -128,10 +134,34 @@ cards:
       card:
         - background-color: |
             [[[
+              const numState = (id) => {
+                const v = Number.parseFloat(states[id]?.state);
+                return Number.isFinite(v) ? v : NaN;
+              };
+
+              const numAttr = (id, attr) => {
+                const v = Number.parseFloat(states[id]?.attributes?.[attr]);
+                return Number.isFinite(v) ? v : NaN;
+              };
+
+              const deltaColor = (delta) => {
+                if (!Number.isFinite(delta)) return 'rgba(255,255,255,.25)';
+                if (delta >= 0) return '#2ee59d';
+                if (delta <= -1.5) return '#ff5d5d';
+                if (delta <= -0.5) return '#ffd166';
+                return '#2ee59d';
+              };
+
+              const room = numState('sensor.wohnzimmer_temp_temperature');
+              const setp = numAttr('climate.wohnzimmer', 'temperature');
+              const delta = Number.isFinite(room) && Number.isFinite(setp)
+                ? (room - setp)
+                : NaN;
+
               const mode = states['select.heizungsbooster_betriebsmodus']?.state;
               if (mode === 'off') return '#8b93a7';      // --off
-              if (mode === 'manual') return '#4aa3ff';  // --manual
-              return '#2ee59d';                          // --auto
+              if (mode === 'manual') return '#4aa3ff';   // --manual
+              return deltaColor(delta);                          // --auto
             ]]]
         - border-radius: 22px
         - box-shadow: 0 18px 45px rgba(0,0,0,0.45)
@@ -174,6 +204,14 @@ cards:
           ]]]
       lines: |
         [[[
+          const getState = (ids) => {
+            for (const id of ids) {
+              const value = states[id]?.state;
+              if (value !== undefined) return value;
+            }
+            return undefined;
+          };
+
           const numState = (id) => {
             const v = Number.parseFloat(states[id]?.state);
             return Number.isFinite(v) ? v : NaN;
@@ -184,58 +222,119 @@ cards:
             return Number.isFinite(v) ? v : NaN;
           };
 
+          const numFromIds = (ids) => {
+            const v = Number.parseFloat(getState(ids));
+            return Number.isFinite(v) ? v : NaN;
+          };
+
+          const fmt1 = (x) => (Number.isFinite(x) ? x.toFixed(1) : '—');
+
+          const updateHistory = (history, value, now, minDelta, maxLen = 30) => {
+            if (!Number.isFinite(value)) return;
+            if (history.length) {
+              const last = history[history.length - 1];
+              const stale = now - last.t > 45000;
+              if (Math.abs(value - last.v) < minDelta && !stale) return;
+            }
+            history.push({ t: now, v: value });
+            if (history.length > maxLen) history.shift();
+          };
+
+          const historyIsUnstable = (tempHistory, fanHistory) => {
+            const now = Date.now();
+            let unstableTemp = false;
+            let unstableFan = false;
+
+            for (let i = Math.max(1, tempHistory.length - 5); i < tempHistory.length; i++) {
+              const prevTemp = tempHistory[i - 1];
+              const currTemp = tempHistory[i];
+              if (currTemp.t - prevTemp.t < 120000 && Math.abs(currTemp.v - prevTemp.v) > 0.4) {
+                unstableTemp = true;
+                break;
+              }
+            }
+
+            for (let j = Math.max(1, fanHistory.length - 5); j < fanHistory.length; j++) {
+              const prevFan = fanHistory[j - 1];
+              const currFan = fanHistory[j];
+              if (currFan.t - prevFan.t < 120000 && Math.abs(currFan.v - prevFan.v) > 25) {
+                unstableFan = true;
+                break;
+              }
+            }
+
+            if (!tempHistory.length || now - tempHistory[tempHistory.length - 1].t > 240000) {
+              unstableTemp = true;
+            }
+
+            return unstableTemp || unstableFan;
+          };
+
           const room = numState('sensor.wohnzimmer_temp_temperature');
           const setp = numAttr('climate.wohnzimmer', 'temperature');
-          const fanPct = numAttr('fan.heizungsbooster_ventilator', 'percentage');
-          const fan = Number.isFinite(fanPct) ? fanPct / 100 : NaN;
+          const fan = numAttr('fan.heizungsbooster_ventilator', 'percentage');
+          const heater = numFromIds([
+            'sensor.heizungsbooster_heizungstemperatur',
+            'sensor.heizungsbooster_heater_temp'
+          ]);
+          const proxy = numFromIds([
+            'sensor.heizungsbooster_heizung_konvektions_proxy',
+            'sensor.heizungsbooster_proxy_temp'
+          ]);
+
           const mode = states['select.heizungsbooster_betriebsmodus']?.state;
 
-          // ---------- Grundprüfung ----------
-          if (!Number.isFinite(room) || !Number.isFinite(setp)) {
-            return 'Temperaturdaten nicht verfügbar';
-          }
+          const hb = window._hb || (window._hb = {});
+          const history = hb.history || (hb.history = {
+            temp: [],
+            heater: [],
+            setp: [],
+            fan: [],
+            lastUpdate: 0
+          });
 
-          const lines = [];
-          lines.push(`Zieltemperatur: ${setp.toFixed(1)} °C – aktuell ${room.toFixed(1)} °C`);
-
-          // ---------- Änderungsrate (lokal wie app.js) ----------
-          window._hb_status = window._hb_status || {};
           const now = Date.now();
-          const prev = window._hb_status.prev;
-          window._hb_status.prev = { temp: room, time: now };
+          if (!history.lastUpdate || now - history.lastUpdate > 1000) {
+            updateHistory(history.temp, room, now, 0.05);
+            updateHistory(history.setp, setp, now, 0.05);
+            updateHistory(history.fan, fan, now, 1);
 
-          let rate = NaN;
-          if (prev) {
-            const dt = (now - prev.time) / 60000;
-            if (dt > 0 && dt <= 10) {
-              rate = (room - prev.temp) / dt;
-              rate = Math.max(Math.min(rate, 0.1), -0.05);
-
-              const fan01 = Number.isFinite(fan) ? fan : 0;
-              rate = rate * (0.7 + 0.6 * fan01);
-            }
+            const heaterValue = Number.isFinite(heater) ? heater : proxy;
+            updateHistory(history.heater, heaterValue, now, 0.1);
+            history.lastUpdate = now;
           }
 
-          const delta = room - setp;
+          const hasTemp = Number.isFinite(room) && Number.isFinite(setp);
+          const hasFan = Number.isFinite(fan);
+          const unstable = historyIsUnstable(history.temp, history.fan);
+          const delta = hasTemp ? (room - setp) : NaN;
 
-          // ---------- Nächste Aktion ----------
-          let next;
+          const statusLines = [];
+          statusLines.push(
+            hasTemp
+              ? `Zieltemperatur: ${fmt1(setp)} °C`
+              : 'Zieltemperatur: —'
+          );
+
+          let nextText = '';
           if (mode === 'off') {
-            next = 'System deaktiviert';
-          } else if (!Number.isFinite(rate)) {
-            next = 'Regelung wartet auf stabile Messwerte';
+            nextText = 'System deaktiviert – keine aktive Regelung';
+          } else if (!hasTemp || !hasFan) {
+            nextText = 'Keine verlässliche Aussage möglich';
+          } else if (unstable) {
+            nextText = 'Regelung passt sich aktuell an';
           } else if (Math.abs(delta) < 0.2) {
-            next = 'Temperatur im Zielbereich – stabil';
-          } else if (delta > 0 && fanPct > 0) {
-            next = 'Lüfterleistung wird als Nächstes reduziert';
-          } else if (delta < 0) {
-            next = fanPct > 0
-              ? 'Lüfterleistung wird als Nächstes erhöht'
-              : 'Lüfter wird als Nächstes aktiviert';
+             nextText = 'Temperatur im Zielbereich – stabil';
+          } else if (delta < -0.2) {
+            nextText = 'Ziel wird weiter angefahren';
+          } else if (delta > 0.2) {
+            nextText = 'Lüfterleistung wird als Nächstes reduziert';
+          } else {
+            nextText = 'System stabil – keine Anpassung geplant';
           }
 
-          if (next) lines.push(next);
-          return lines.map(l => `<div>${l}</div>`).join('');
+          if (nextText) statusLines.push(nextText);
+          return statusLines.map(line => `<div>${line}</div>`).join('');
         ]]]
   - type: custom:button-card
     show_icon: false
@@ -249,6 +348,12 @@ cards:
         - box-shadow: 0 18px 45px rgba(0,0,0,0.45)
         - padding: 14px
         - color: rgba(255,255,255,0.94)
+        - display: |
+            [[[
+              return states['select.heizungsbooster_betriebsmodus']?.state === 'off'
+                ? 'none'
+                : 'block';
+            ]]]
       grid:
         - grid-template-areas: |
             "label"
@@ -265,11 +370,53 @@ cards:
           - font-size: 26px
           - font-weight: 900
           - line-height: 1.1
+          - color: |
+              [[[
+                const deltaColor = (delta) => {
+                  if (!Number.isFinite(delta)) return 'rgba(255,255,255,.25)';
+                  if (delta >= 0) return '#2ee59d';
+                  if (delta <= -1.5) return '#ff5d5d';
+                  if (delta <= -0.5) return '#ffd166';
+                  return '#2ee59d';
+                };
+
+                const room = Number.parseFloat(
+                  states['sensor.wohnzimmer_temp_temperature']?.state
+                );
+                const setp = Number.parseFloat(
+                  states['climate.wohnzimmer']?.attributes?.temperature
+                );
+                const delta = Number.isFinite(room) && Number.isFinite(setp)
+                  ? (room - setp)
+                  : NaN;
+                return deltaColor(delta);
+              ]]]
         eta:
           - justify-self: start
           - font-size: 14px
           - font-size: 14px
           - color: rgba(255,255,255,0.65)
+          - color: |
+              [[[
+                const deltaColor = (delta) => {
+                  if (!Number.isFinite(delta)) return 'rgba(255,255,255,.25)';
+                  if (delta >= 0) return '#2ee59d';
+                  if (delta <= -1.5) return '#ff5d5d';
+                  if (delta <= -0.5) return '#ffd166';
+                  return '#2ee59d';
+                };
+
+                const room = Number.parseFloat(
+                  states['sensor.wohnzimmer_temp_temperature']?.state
+                );
+                const setp = Number.parseFloat(
+                  states['climate.wohnzimmer']?.attributes?.temperature
+                );
+                const delta = Number.isFinite(room) && Number.isFinite(setp)
+                  ? (room - setp)
+                  : NaN;
+                return deltaColor(delta);
+              ]]]
     custom_fields:
       label: Zielabweichung
       delta: |
@@ -280,92 +427,200 @@ cards:
           const setp = Number.parseFloat(
             states['climate.wohnzimmer']?.attributes?.temperature
           );
-          if (!Number.isFinite(room) || !Number.isFinite(setp)) {
-            return '—';
-          }
-          const d = room - setp;
-          const sign = d > 0 ? '+' : '';
-          return `${sign}${d.toFixed(1)} °C`;
+          const delta = Number.isFinite(room) && Number.isFinite(setp)
+            ? (room - setp)
+            : NaN;
+          const fmtSigned = (value) => {
+            if (!Number.isFinite(value)) return '—';
+            const sign = value > 0 ? '+' : '';
+            return `${sign}${value.toFixed(1)}`;
+          };
+          return `${fmtSigned(delta)} °C`;
         ]]]
       eta: |
         [[[
-          const room = Number.parseFloat(
-            states['sensor.wohnzimmer_temp_temperature']?.state
-          );
-          const setp = Number.parseFloat(
-            states['climate.wohnzimmer']?.attributes?.temperature
-          );
-          const fanPct = Number.parseFloat(
-            states['fan.heizungsbooster_ventilator']?.attributes?.percentage
-          );
+          const getState = (ids) => {
+            for (const id of ids) {
+              const value = states[id]?.state;
+              if (value !== undefined) return value;
+            }
+            return undefined;
+          };
+
+          const numState = (id) => {
+            const v = Number.parseFloat(states[id]?.state);
+            return Number.isFinite(v) ? v : NaN;
+          };
+
+          const numAttr = (id, attr) => {
+            const v = Number.parseFloat(states[id]?.attributes?.[attr]);
+            return Number.isFinite(v) ? v : NaN;
+          };
+
+          const numFromIds = (ids) => {
+            const v = Number.parseFloat(getState(ids));
+            return Number.isFinite(v) ? v : NaN;
+          };
+
+          const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+          const fmtMinutes = (value) => {
+            if (!Number.isFinite(value)) return '—';
+            return Math.max(0, Math.round(value));
+          };
+
+          const updateHistory = (history, value, now, minDelta, maxLen = 30) => {
+            if (!Number.isFinite(value)) return;
+            if (history.length) {
+              const last = history[history.length - 1];
+              const stale = now - last.t > 45000;
+              if (Math.abs(value - last.v) < minDelta && !stale) return;
+            }
+          history.push({ t: now, v: value });
+            if (history.length > maxLen) history.shift();
+          };
+
+          const heaterIsRising = (history) => {
+            if (history.length < 2) return false;
+            const last = history[history.length - 1];
+            const prev = history[history.length - 2];
+            return last.v > prev.v;
+          };
+
+          const historyIsUnstable = (tempHistory, fanHistory) => {
+            const now = Date.now();
+            let unstableTemp = false;
+            let unstableFan = false;
+
+            for (let i = Math.max(1, tempHistory.length - 5); i < tempHistory.length; i++) {
+              const prevTemp = tempHistory[i - 1];
+              const currTemp = tempHistory[i];
+              if (currTemp.t - prevTemp.t < 120000 && Math.abs(currTemp.v - prevTemp.v) > 0.4) {
+                unstableTemp = true;
+                break;
+              }
+            }
+
+            for (let j = Math.max(1, fanHistory.length - 5); j < fanHistory.length; j++) {
+              const prevFan = fanHistory[j - 1];
+              const currFan = fanHistory[j];
+              if (currFan.t - prevFan.t < 120000 && Math.abs(currFan.v - prevFan.v) > 25) {
+                unstableFan = true;
+                break;
+              }
+            }
+
+           if (!tempHistory.length || now - tempHistory[tempHistory.length - 1].t > 240000) {
+              unstableTemp = true;
+            }
+
+            return unstableTemp || unstableFan;
+          };
+
+          const computeEffectiveRate = (roomHistory, heaterHistory, fan) => {
+            if (roomHistory.length < 2) return NaN;
+            const first = roomHistory[0];
+            const last = roomHistory[roomHistory.length - 1];
+            const dt = (last.t - first.t) / 60000;
+            if (dt <= 0) return NaN;
+            const rateRoom = (last.v - first.v) / dt;
+            const heaterTemp = heaterHistory.length
+              ? heaterHistory[heaterHistory.length - 1].v
+              : NaN;
+            const heatSupport = Number.isFinite(heaterTemp)
+              ? clamp((heaterTemp - last.v) / 20, 0, 1)
+              : 0;
+            const fanFactor = 0.5 + (Number.isFinite(fan) ? fan : 0) / 200;
+            return rateRoom * fanFactor * (1 + heatSupport);
+          };
+
+          const estimateETA = (room, setp, rate) => {
+            if (!Number.isFinite(rate) || rate <= 0) return NaN;
+            const remaining = setp - room;
+            if (remaining <= 0) return 0;
+            return remaining / rate;
+          };
+
+          const room = numState('sensor.wohnzimmer_temp_temperature');
+          const setp = numAttr('climate.wohnzimmer', 'temperature');
+          const fan = numAttr('fan.heizungsbooster_ventilator', 'percentage');
+          const heater = numFromIds([
+            'sensor.heizungsbooster_heizungstemperatur',
+            'sensor.heizungsbooster_heater_temp'
+          ]);
+          const proxy = numFromIds([
+            'sensor.heizungsbooster_heizung_konvektions_proxy',
+            'sensor.heizungsbooster_proxy_temp'
+          ]);
           const mode = states['select.heizungsbooster_betriebsmodus']?.state;
 
-          if (!Number.isFinite(room) || !Number.isFinite(setp)) {
-            return 'Keine ETA berechenbar';
-          }
+          const hb = window._hb || (window._hb = {});
+          const history = hb.history || (hb.history = {
+            temp: [],
+            heater: [],
+            setp: [],
+            fan: [],
+            lastUpdate: 0
+          });
 
-          if (mode === 'off') {
-            return 'System deaktiviert';
-          }
-
-          // ---- lokale Änderungsrate (identisch zur Status-Karte) ----
-          window._hb_delta = window._hb_delta || {};
           const now = Date.now();
-          const prev = window._hb_delta.prev;
-          window._hb_delta.prev = { temp: room, time: now };
+          if (!history.lastUpdate || now - history.lastUpdate > 1000) {
+            updateHistory(history.temp, room, now, 0.05);
+            updateHistory(history.setp, setp, now, 0.05);
+            updateHistory(history.fan, fan, now, 1);
 
-          let rate = NaN;
-          if (prev) {
-            const dt = (now - prev.time) / 60000;
-            if (dt > 0 && dt <= 10) {
-              rate = (room - prev.temp) / dt;
-              rate = Math.max(Math.min(rate, 0.1), -0.05);
+            const heaterValue = Number.isFinite(heater) ? heater : proxy;
+            updateHistory(history.heater, heaterValue, now, 0.1);
+            history.lastUpdate = now;
+          }
 
-              const fan01 = Number.isFinite(fanPct) ? fanPct / 100 : 0;
-              rate = rate * (0.7 + 0.6 * fan01);
+          const hasTemp = Number.isFinite(room) && Number.isFinite(setp);
+          const hasFan = Number.isFinite(fan);
+          const unstable = historyIsUnstable(history.temp, history.fan);
+          const delta = hasTemp ? (room - setp) : NaN;
+
+          let etaText = '';
+          if (mode === 'off') {
+            etaText = 'Keine ETA berechenbar';
+          } else if (!hasTemp) {
+            etaText = 'Keine ETA berechenbar';
+          } else if (unstable) {
+            etaText = 'Warte auf stabile Messwerte';
+          } else if (mode !== 'auto') {
+            etaText = 'Keine ETA berechenbar';
+          } else if (!Number.isFinite(delta) || delta >= -0.2) {
+            etaText = 'Keine ETA berechenbar';
+          } else if (!hasFan || fan === 0) {
+            etaText = 'Keine ETA berechenbar';
+          } else {
+            const heaterTemp = history.heater.length
+              ? history.heater[history.heater.length - 1].v
+              : NaN;
+            const heaterRising = heaterIsRising(history.heater);
+            const proxyWarm = Number.isFinite(proxy) && Number.isFinite(room)
+              ? proxy > room + 0.8
+              : false;
+            if (Number.isFinite(heaterTemp) && heaterTemp < room) {
+              etaText = 'Keine ETA berechenbar';
+            } else if (!heaterRising && !proxyWarm) {
+              etaText = 'Keine ETA berechenbar';
+            } else {
+              const effectiveRate = computeEffectiveRate(history.temp, history.heater, fan);
+              if (Number.isFinite(effectiveRate) && effectiveRate > 0) {
+                const etaMinutes = estimateETA(room, setp, effectiveRate);
+                if (Number.isFinite(etaMinutes)) {
+                  etaText = `Ziel voraussichtlich in ca. ${fmtMinutes(etaMinutes)} Minuten erreicht`;
+                } else {
+                  etaText = 'Keine ETA berechenbar';
+                }
+              } else {
+                etaText = 'Keine ETA berechenbar';
+              }
             }
           }
 
-          const delta = setp - room;
-
-          if (!Number.isFinite(rate) || rate < 0.01 || delta <= 0) {
-            return 'Keine ETA berechenbar';
-          }
-
-          const eta = delta / rate;
-          if (!Number.isFinite(eta) || eta > 120) {
-            return 'Keine ETA berechenbar';
-          }
-
-          if (eta < 2) {
-            return 'Zieltemperatur fast erreicht';
-          }
-
-          return `ETA: ca. ${Math.round(eta)} min`;
+          return etaText;
         ]]]
-    state:
-      - operator: template
-        value: |
-          [[[
-            const room = Number.parseFloat(states['sensor.wohnzimmer_temp_temperature']?.state);
-            const setp = Number.parseFloat(states['climate.wohnzimmer']?.attributes?.temperature);
-            return Number.isFinite(room) && Number.isFinite(setp) && (room - setp) > 0;
-          ]]]
-        styles:
-          custom_fields:
-            delta:
-              - color: "#2ee59d"
-      - operator: template
-        value: |
-          [[[
-            const room = Number.parseFloat(states['sensor.wohnzimmer_temp_temperature']?.state);
-            const setp = Number.parseFloat(states['climate.wohnzimmer']?.attributes?.temperature);
-            return Number.isFinite(room) && Number.isFinite(setp) && (room - setp) < 0;
-          ]]]
-        styles:
-          custom_fields:
-            delta:
-              - color: "#ff5d5d"
   - type: custom:button-card
     show_icon: false
     show_name: false
@@ -559,14 +814,49 @@ cards:
         custom_fields:
           text: |
             [[[
-              const heater = states['sensor.heizungsbooster_heater_temp']?.state;
-              const proxy  = states['sensor.wohnzimmer_temp_temperature']?.state;
-              const mode   = states['select.heizungsbooster_betriebsmodus']?.state;
+              const getState = (ids) => {
+                for (const id of ids) {
+                  const value = states[id]?.state;
+                  if (value !== undefined) return value;
+                }
+                return undefined;
+              };
+
+              const numFromIds = (ids) => {
+                const v = Number.parseFloat(getState(ids));
+                return Number.isFinite(v) ? v : NaN;
+              };
+
+              const fmt1 = (value) => (Number.isFinite(value) ? value.toFixed(1) : '—');
+              const fmtSigned = (value) => {
+                if (!Number.isFinite(value)) return '—';
+                const sign = value > 0 ? '+' : '';
+                return `${sign}${value.toFixed(1)}`;
+              };
+
+              const heater = numFromIds([
+                'sensor.heizungsbooster_heizungstemperatur',
+                'sensor.heizungsbooster_heater_temp'
+              ]);
+              const proxy = numFromIds([
+                'sensor.heizungsbooster_heizung_konvektions_proxy',
+                'sensor.heizungsbooster_proxy_temp'
+              ]);
+              const room = Number.parseFloat(
+                states['sensor.wohnzimmer_temp_temperature']?.state
+              );
+              const proxyDiff = Number.isFinite(proxy) && Number.isFinite(room)
+                ? (proxy - room)
+                : NaN;
+              const diagState = getState([
+                'sensor.heizungsbooster_k_faktor_anpassung',
+                'sensor.k_faktor_anpassung'
+              ]) ?? '—';
 
               return `
-              Heizung: ${heater ?? '—'} °C
-              Proxy:   ${proxy ?? '—'} °C
-              Modus:   ${mode ?? '—'}
+              Heizung: ${fmt1(heater)} °C
+              Proxy:   ${fmtSigned(proxyDiff)} °C
+              Regelzustand: ${diagState}
               `;
             ]]]
           chart:
