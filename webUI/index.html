@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <!-- Cache-Busting -->
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
 
@@ -27,6 +27,7 @@
     <section id="status" class="card">
       <div class="label">Status</div>
       <div id="statusText" class="value">—</div>
+      <div id="statusDetails" class="status-lines"></div>
     </section>
 
     <section id="delta-eta" class="card">
@@ -58,12 +59,19 @@
     <section id="diagnostics" class="card diag-panel" hidden>
       <div>Heizung: <span id="diagHeater">—</span></div>
       <div>Proxy: <span id="diagProxy">—</span></div>
-      <div>Fan intern: <span id="diagFan">—</span></div>
       <div>Regelzustand: <span id="diagState">—</span></div>
+      <div class="diag-chart">
+        <canvas id="diagChart" aria-label="Diagnose Verlauf"></canvas>
+      </div>
+      <div class="diag-legend">
+        <span class="legend room">Ist-Temp</span>
+        <span class="legend setp">Soll-Temp</span>
+        <span class="legend fan">Lüfter</span>
+      </div>
     </section>
   </main>
 </div>
 
-<script src="app.js?v=4"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>
