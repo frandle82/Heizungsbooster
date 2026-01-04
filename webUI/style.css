@@ -65,6 +65,7 @@ html,body{
   background:transparent;
   color:rgba(255,255,255,.78);
   cursor:pointer;
+  text-align:center;
 }
 
 .segbtn.active{color:#071018}
@@ -162,6 +163,18 @@ input[type=range]{width:100%}
   font-size:22px;
 }
 
+.status-lines{
+  display:grid;
+  gap:6px;
+  font-size:14px;
+  color:rgba(7,16,24,.78);
+  font-weight:600;
+}
+
+.status-line{
+  line-height:1.2;
+}
+
 .diag-toggle{
   width:100%;
   height:28px;
@@ -180,6 +193,65 @@ input[type=range]{width:100%}
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size:12px;
   color:var(--muted);
+}
+
+.diag-chart{
+  margin-top:12px;
+  padding:10px;
+  border-radius:14px;
+  background:rgba(255,255,255,.05);
+}
+
+.diag-chart canvas{
+  display:block;
+  width:100%;
+  height:140px;
+}
+
+.diag-legend{
+  display:flex;
+  gap:12px;
+  margin-top:8px;
+  font-size:11px;
+  letter-spacing:.02em;
+  color:var(--muted);
+}
+
+.diag-legend .legend{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+
+.diag-legend .legend::before{
+  content:"";
+  width:10px;
+  height:2px;
+  border-radius:2px;
+  background:currentColor;
+}
+
+.diag-legend .legend.room{color:#4aa3ff}
+.diag-legend .legend.setp{color:#2ee59d}
+.diag-legend .legend.fan{color:#ffd166}
+
+@media(max-width:520px){
+  .top{
+    flex-direction:column;
+    align-items:stretch;
+  }
+
+  .seg{
+    width:100%;
+    flex-wrap:wrap;
+  }
+
+  .segbtn{
+    flex:1 1 33%;
+    min-width:72px;
+    padding:10px 8px;
+    font-size:12px;
+  }
 }
 
 @media(min-width:820px){
