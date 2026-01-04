@@ -811,6 +811,9 @@ cards:
                 "chart"
                 "legende"
             - row-gap: 12px
+          custom_fields:
+            text: 
+              - text-align: start
         custom_fields:
           text: |
             [[[
@@ -854,9 +857,9 @@ cards:
               ]) ?? '—';
 
               return `
-              Heizung: ${fmt1(heater)} °C
-              Proxy:   ${fmtSigned(proxyDiff)} °C
-              Regelzustand: ${diagState}
+              Heizung: ${fmt1(heater)} °C <br>
+              Proxy:   ${fmtSigned(proxyDiff)} °C <br>
+              Regelzustand: ${diagState} 
               `;
             ]]]
           chart:
