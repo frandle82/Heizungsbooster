@@ -1,0 +1,667 @@
+type: vertical-stack
+cards:
+  - type: custom:button-card
+    name: Heizungsbooster
+    styles:
+      card:
+        - background: none
+        - color: tranparent
+        - margin-bottom: 6px
+      name:
+        - font-family: Segoe UI,Roboto,Helvetica,Arial
+        - text-align: start
+        - justify-self: start
+        - font-weight: 1000
+        - font-size: 22px
+  - type: custom:button-card
+    entity: select.heizungsbooster_betriebsmodus
+    show_icon: false
+    show_name: false
+    show_state: false
+    styles:
+      card:
+        - background-color: rgba(255,255,255,0.08)
+        - border-radius: 999px
+        - padding: 4px
+        - box-shadow: none
+      grid:
+        - grid-template-areas: "\"aus manuell auto\""
+        - grid-template-columns: 1fr 1fr 1fr
+        - grid-template-rows: auto
+    custom_fields:
+      aus:
+        card:
+          type: custom:button-card
+          name: AUS
+          tap_action:
+            action: call-service
+            service: select.select_option
+            service_data:
+              entity_id: select.heizungsbooster_betriebsmodus
+              option: "off"
+          styles:
+            card:
+              - background-color: |
+                  [[[
+                    return entity.state === 'off'
+                    ? '#8b93a7'
+                    : 'transparent';
+                  ]]]
+              - color: |
+                  [[[
+                    return entity.state === 'off'
+                      ? '#0b1a14'
+                      : 'rgba(255,255,255,0.78)';
+                  ]]]
+              - border-radius: 999px
+              - font-weight: 600
+              - box-shadow: none
+              - padding: 10px 14px
+              - font-size: 13px
+              - font-weight: 750
+      manuell:
+        card:
+          type: custom:button-card
+          name: MANUELL
+          tap_action:
+            action: call-service
+            service: select.select_option
+            service_data:
+              entity_id: select.heizungsbooster_betriebsmodus
+              option: manual
+          styles:
+            card:
+              - background-color: |
+                  [[[
+                    return entity.state === 'manual'
+                      ? '#4aa3ff'
+                      : 'transparent';
+                  ]]]
+              - color: |
+                  [[[
+                    return entity.state === 'manual'
+                      ? '#0b1a14'
+                      : 'rgba(255,255,255,0.78)';
+                  ]]]
+              - border-radius: 999px
+              - font-weight: 600
+              - box-shadow: none
+              - padding: 10px 14px
+              - font-size: 13px
+              - font-weight: 750
+      auto:
+        card:
+          type: custom:button-card
+          name: AUTO
+          tap_action:
+            action: call-service
+            service: select.select_option
+            service_data:
+              entity_id: select.heizungsbooster_betriebsmodus
+              option: auto
+          styles:
+            card:
+              - background-color: |
+                  [[[
+                    return entity.state === 'auto'
+                      ? '#2ee59d'
+                      : 'transparent';
+                  ]]]
+              - color: |
+                  [[[
+                    return entity.state === 'auto'
+                      ? '#0b1a14'
+                      : 'rgba(255,255,255,0.78)';
+                  ]]]
+              - border-radius: 999px
+              - font-weight: 600
+              - box-shadow: none
+              - padding: 10px 14px
+              - font-size: 13px
+              - font-weight: 750
+  - type: custom:button-card
+    entity: select.heizungsbooster_betriebsmodus
+    show_icon: false
+    show_name: false
+    show_state: false
+    styles:
+      card:
+        - background-color: |
+            [[[
+              const mode = states['select.heizungsbooster_betriebsmodus']?.state;
+              if (mode === 'off') return '#8b93a7';      // --off
+              if (mode === 'manual') return '#4aa3ff';  // --manual
+              return '#2ee59d';                          // --auto
+            ]]]
+        - border-radius: 22px
+        - box-shadow: 0 18px 45px rgba(0,0,0,0.45)
+        - padding: 14px
+        - color: "#071018"
+      grid:
+        - grid-template-areas: |
+            "label"
+            "mode"
+            "lines"
+        - row-gap: 10px
+      custom_fields:
+        label:
+          - justify-self: start
+          - grid-area: label
+          - font-size: 12px
+          - color: rgba(7,16,24,0.65)
+        mode:
+          - justify-self: start
+          - font-size: 22px
+          - font-weight: 900
+          - line-height: 1.1
+          - color: "#071018"
+        lines:
+          - justify-self: start
+          - text-align: start
+          - font-size: 14px
+          - font-weight: 600
+          - line-height: 1.25
+          - color: rgba(7,16,24,0.78)
+    custom_fields:
+      label: Status
+      mode: |
+        [[[
+            const raw = states['select.heizungsbooster_betriebsmodus']?.state;
+            if (raw === 'off') return 'Modus: AUS';
+            if (raw === 'manual') return 'Modus: MANUELL';
+            if (raw === 'auto') return 'Modus: AUTO';
+            return 'Modus: —';
+          ]]]
+      lines: |
+        [[[
+          const numState = (id) => {
+            const v = Number.parseFloat(states[id]?.state);
+            return Number.isFinite(v) ? v : NaN;
+          };
+
+          const numAttr = (id, attr) => {
+            const v = Number.parseFloat(states[id]?.attributes?.[attr]);
+            return Number.isFinite(v) ? v : NaN;
+          };
+
+          const room = numState('sensor.wohnzimmer_temp_temperature');
+          const setp = numAttr('climate.wohnzimmer', 'temperature');
+          const fanPct = numAttr('fan.heizungsbooster_ventilator', 'percentage');
+          const fan = Number.isFinite(fanPct) ? fanPct / 100 : NaN;
+          const mode = states['select.heizungsbooster_betriebsmodus']?.state;
+
+          // ---------- Grundprüfung ----------
+          if (!Number.isFinite(room) || !Number.isFinite(setp)) {
+            return 'Temperaturdaten nicht verfügbar';
+          }
+
+          const lines = [];
+          lines.push(`Zieltemperatur: ${setp.toFixed(1)} °C – aktuell ${room.toFixed(1)} °C`);
+
+          // ---------- Änderungsrate (lokal wie app.js) ----------
+          window._hb_status = window._hb_status || {};
+          const now = Date.now();
+          const prev = window._hb_status.prev;
+          window._hb_status.prev = { temp: room, time: now };
+
+          let rate = NaN;
+          if (prev) {
+            const dt = (now - prev.time) / 60000;
+            if (dt > 0 && dt <= 10) {
+              rate = (room - prev.temp) / dt;
+              rate = Math.max(Math.min(rate, 0.1), -0.05);
+
+              const fan01 = Number.isFinite(fan) ? fan : 0;
+              rate = rate * (0.7 + 0.6 * fan01);
+            }
+          }
+
+          const delta = room - setp;
+
+          // ---------- Nächste Aktion ----------
+          let next;
+          if (mode === 'off') {
+            next = 'System deaktiviert';
+          } else if (!Number.isFinite(rate)) {
+            next = 'Regelung wartet auf stabile Messwerte';
+          } else if (Math.abs(delta) < 0.2) {
+            next = 'Temperatur im Zielbereich – stabil';
+          } else if (delta > 0 && fanPct > 0) {
+            next = 'Lüfterleistung wird als Nächstes reduziert';
+          } else if (delta < 0) {
+            next = fanPct > 0
+              ? 'Lüfterleistung wird als Nächstes erhöht'
+              : 'Lüfter wird als Nächstes aktiviert';
+          }
+
+          if (next) lines.push(next);
+          return lines.map(l => `<div>${l}</div>`).join('');
+        ]]]
+  - type: custom:button-card
+    show_icon: false
+    show_name: false
+    show_state: false
+    color_type: card
+    styles:
+      card:
+        - background: rgba(255,255,255,0.06)
+        - border-radius: 22px
+        - box-shadow: 0 18px 45px rgba(0,0,0,0.45)
+        - padding: 14px
+        - color: rgba(255,255,255,0.94)
+      grid:
+        - grid-template-areas: |
+            "label"
+            "delta"
+            "eta"
+        - row-gap: 10px
+      custom_fields:
+        label:
+          - justify-self: start
+          - font-size: 12px
+          - color: rgba(255,255,255,0.65)
+        delta:
+          - justify-self: start
+          - font-size: 26px
+          - font-weight: 900
+          - line-height: 1.1
+        eta:
+          - justify-self: start
+          - font-size: 14px
+          - font-size: 14px
+          - color: rgba(255,255,255,0.65)
+    custom_fields:
+      label: Zielabweichung
+      delta: |
+        [[[
+          const room = Number.parseFloat(
+            states['sensor.wohnzimmer_temp_temperature']?.state
+          );
+          const setp = Number.parseFloat(
+            states['climate.wohnzimmer']?.attributes?.temperature
+          );
+          if (!Number.isFinite(room) || !Number.isFinite(setp)) {
+            return '—';
+          }
+          const d = room - setp;
+          const sign = d > 0 ? '+' : '';
+          return `${sign}${d.toFixed(1)} °C`;
+        ]]]
+      eta: |
+        [[[
+          const room = Number.parseFloat(
+            states['sensor.wohnzimmer_temp_temperature']?.state
+          );
+          const setp = Number.parseFloat(
+            states['climate.wohnzimmer']?.attributes?.temperature
+          );
+          const fanPct = Number.parseFloat(
+            states['fan.heizungsbooster_ventilator']?.attributes?.percentage
+          );
+          const mode = states['select.heizungsbooster_betriebsmodus']?.state;
+
+          if (!Number.isFinite(room) || !Number.isFinite(setp)) {
+            return 'Keine ETA berechenbar';
+          }
+
+          if (mode === 'off') {
+            return 'System deaktiviert';
+          }
+
+          // ---- lokale Änderungsrate (identisch zur Status-Karte) ----
+          window._hb_delta = window._hb_delta || {};
+          const now = Date.now();
+          const prev = window._hb_delta.prev;
+          window._hb_delta.prev = { temp: room, time: now };
+
+          let rate = NaN;
+          if (prev) {
+            const dt = (now - prev.time) / 60000;
+            if (dt > 0 && dt <= 10) {
+              rate = (room - prev.temp) / dt;
+              rate = Math.max(Math.min(rate, 0.1), -0.05);
+
+              const fan01 = Number.isFinite(fanPct) ? fanPct / 100 : 0;
+              rate = rate * (0.7 + 0.6 * fan01);
+            }
+          }
+
+          const delta = setp - room;
+
+          if (!Number.isFinite(rate) || rate < 0.01 || delta <= 0) {
+            return 'Keine ETA berechenbar';
+          }
+
+          const eta = delta / rate;
+          if (!Number.isFinite(eta) || eta > 120) {
+            return 'Keine ETA berechenbar';
+          }
+
+          if (eta < 2) {
+            return 'Zieltemperatur fast erreicht';
+          }
+
+          return `ETA: ca. ${Math.round(eta)} min`;
+        ]]]
+    state:
+      - operator: template
+        value: |
+          [[[
+            const room = Number.parseFloat(states['sensor.wohnzimmer_temp_temperature']?.state);
+            const setp = Number.parseFloat(states['climate.wohnzimmer']?.attributes?.temperature);
+            return Number.isFinite(room) && Number.isFinite(setp) && (room - setp) > 0;
+          ]]]
+        styles:
+          custom_fields:
+            delta:
+              - color: "#2ee59d"
+      - operator: template
+        value: |
+          [[[
+            const room = Number.parseFloat(states['sensor.wohnzimmer_temp_temperature']?.state);
+            const setp = Number.parseFloat(states['climate.wohnzimmer']?.attributes?.temperature);
+            return Number.isFinite(room) && Number.isFinite(setp) && (room - setp) < 0;
+          ]]]
+        styles:
+          custom_fields:
+            delta:
+              - color: "#ff5d5d"
+  - type: custom:button-card
+    show_icon: false
+    show_name: false
+    show_state: false
+    color_type: card
+    styles:
+      card:
+        - background: rgba(255,255,255,0.06)
+        - border-radius: 22px
+        - box-shadow: 0 18px 45px rgba(0,0,0,0.45)
+        - padding: 14px
+      grid:
+        - grid-template-areas: |
+            "label"
+            "pair"
+        - row-gap: 10px
+      custom_fields:
+        label:
+          - justify-self: start
+          - font-size: 12px
+          - color: rgba(255,255,255,0.65)
+        pair:
+          - justify-self: start
+          - text-align: start
+          - display: flex
+          - flex-direction: column
+          - gap: 6px
+          - font-size: 16px
+          - font-weight: 700
+          - line-height: 1.25
+          - letter-spacing: 0.01em
+          - color: rgba(255,255,255,0.94)
+          - font-variant-numeric: tabular-nums
+    custom_fields:
+      label: Temperaturen
+      pair: |
+        [[[
+          const room = Number.parseFloat(
+            states['sensor.wohnzimmer_temp_temperature']?.state
+          );
+          const setp = Number.parseFloat(
+            states['climate.wohnzimmer']?.attributes?.temperature
+          );
+
+          const roomText = Number.isFinite(room)
+            ? `Raum ${room.toFixed(1)} °C`
+            : 'Raum — °C';
+
+          const setpText = Number.isFinite(setp)
+            ? `Soll ${setp.toFixed(1)} °C`
+            : 'Soll — °C';
+
+          return `
+            <span>${roomText}</span>
+            <span>${setpText}</span>
+          `;
+        ]]]
+  - type: custom:button-card
+    entity: fan.heizungsbooster_ventilator
+    show_icon: false
+    show_name: false
+    show_state: false
+    color_type: card
+    styles:
+      card:
+        - background: rgba(255,255,255,0.06)
+        - border-radius: 22px
+        - box-shadow: 0 18px 45px rgba(0,0,0,0.45)
+        - padding: 14px
+        - color: rgba(255,255,255,0.94)
+      grid:
+        - grid-template-areas: |
+            "label"
+            "value"
+            "slider"
+        - row-gap: 10px
+      custom_fields:
+        label:
+          - justify-self: start
+          - font-size: 12px
+          - color: rgba(255,255,255,0.65)
+        value:
+          - justify-self: start
+          - font-size: 24px
+          - font-weight: 900
+        slider:
+          - display: |
+              [[[
+                return states['select.heizungsbooster_betriebsmodus']?.state === 'manual'
+                  ? 'block' : 'none';
+              ]]]
+          - width: 100%
+          - justify-self: stretch
+          - grid-column: 1 / -1
+    custom_fields:
+      label: Lüfter
+      value: |
+        [[[
+          const pct = Number.parseFloat(
+            states['fan.heizungsbooster_ventilator']?.attributes?.percentage
+          );
+          return Number.isFinite(pct) ? `${Math.round(pct)} %` : '— %';
+        ]]]
+      slider: |
+        [[[
+          const pct = Number.parseFloat(
+            states['fan.heizungsbooster_ventilator']?.attributes?.percentage
+          );
+          const value = Number.isFinite(pct) ? Math.round(pct) : 0;
+
+          return `
+            <div style="width:100%; pointer-events:auto; margin-top:14px;">
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="25"
+                value="${value}"
+                style="
+                  width:100%;
+                  pointer-events:auto;
+                  accent-color:#2ee59d;
+                "
+                oninput="
+                  const v = Math.round(this.value / 25) * 25;
+                  this.value = v;
+                  hass.callService('fan','set_percentage',{
+                    entity_id:'fan.heizungsbooster_ventilator',
+                    percentage:v
+                  });
+                "
+              />
+              <div style="
+                display:flex;
+                justify-content:space-between;
+                font-size:11px;
+                color:rgba(255,255,255,0.65);
+                margin-top:6px;
+              ">
+                <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+              </div>
+            </div>
+          `;
+        ]]]
+  - type: custom:expander-card
+    expanded: false
+    clear: false
+    title: Diagnose
+    title-card:
+      type: custom:button-card
+      show_icon: false
+      show_name: false
+      show_state: false
+      styles:
+        card:
+          - height: 28px
+          - background: rgba(255,255,255,0.06)
+          - border-radius: 14px
+          - box-shadow: none
+          - color: rgba(255,255,255,0.65)
+          - font-size: 14px
+          - letter-spacing: 0.08em
+          - padding: 0
+          - display: flex
+          - align-items: center
+          - justify-content: center
+      name: DIAGNOSE
+    cards:
+      - type: custom:button-card
+        show_icon: false
+        show_name: false
+        show_state: false
+        styles:
+          card:
+            - background: rgba(255,255,255,0.05)
+            - padding: 10px
+            - border-radius: 14px
+            - box-shadow: 0 18px 45px rgba(0,0,0,0.45)
+            - padding: 14px
+            - font-family: >
+                ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                "Liberation Mono", "Courier New", monospace
+            - font-size: 12px
+            - color: rgba(255,255,255,0.65)
+          grid:
+            - grid-template-areas: |
+                "text"
+                "chart"
+                "legende"
+            - row-gap: 12px
+        custom_fields:
+          text: |
+            [[[
+              const heater = states['sensor.heizungsbooster_heater_temp']?.state;
+              const proxy  = states['sensor.wohnzimmer_temp_temperature']?.state;
+              const mode   = states['select.heizungsbooster_betriebsmodus']?.state;
+
+              return `
+              Heizung: ${heater ?? '—'} °C
+              Proxy:   ${proxy ?? '—'} °C
+              Modus:   ${mode ?? '—'}
+              `;
+            ]]]
+          chart:
+            card:
+              type: custom:apexcharts-card
+              graph_span: 6h
+              update_interval: 30s
+              header:
+                show: false
+              apex_config:
+                chart:
+                  background: transparent
+                  toolbar:
+                    show: false
+                grid:
+                  borderColor: rgba(255,255,255,0.08)
+                stroke:
+                  strokeDashArray: 2
+                  curve: smooth
+                legend:
+                  show: false
+                xaxis:
+                  labels:
+                    style:
+                      colors: rgba(255,255,255,0.5)
+              yaxis:
+                - id: temp
+                  min: 12
+                  max: 28
+                  decimals: 1
+                  apex_config:
+                    labels:
+                      style:
+                        colors: rgba(255,255,255,0.5)
+                - id: fan
+                  opposite: true
+                  min: 0
+                  max: 100
+                  decimals: 0
+                  apex_config:
+                    labels:
+                      style:
+                        colors: rgba(255,255,255,0.5)
+              series:
+                - entity: sensor.wohnzimmer_temp_temperature
+                  name: Ist-Temp
+                  color: "#4aa3ff"
+                  yaxis_id: temp
+                  type: line
+                - entity: climate.wohnzimmer
+                  attribute: temperature
+                  name: Soll-Temp
+                  color: "#2ee59d"
+                  yaxis_id: temp
+                  type: line
+                - entity: fan.heizungsbooster_ventilator
+                  attribute: percentage
+                  name: Lüfter
+                  type: column
+                  color: "#ffd166"
+                  yaxis_id: fan
+          legende:
+            card:
+              type: custom:button-card
+              show_icon: false
+              show_name: false
+              show_state: false
+              styles:
+                grid:
+                  - grid-template-areas: |
+                      "room setp fan . ."
+                  - grid-template-columns: 1fr 1fr 1fr 1fr 1fr
+                  - grid-template-rows: auto
+                card:
+                  - background: none
+                  - box-shadow: none
+                  - padding: 0
+                  - margin-top: 8px
+                  - display: flex
+                  - gap: 12px
+                  - font-size: 11px
+                  - letter-spacing: 0.02em
+                  - color: rgba(255,255,255,0.65)
+                custom_fields:
+                  room:
+                    - color: "#4aa3ff"
+                  setp:
+                    - color: "#2ee59d"
+                  fan:
+                    - color: "#ffd166"
+              custom_fields:
+                room: "- Ist-Temp"
+                setp: "- Soll-Temp"
+                fan: "- Lüfter"
+    animation: true
+    expander-card-background: rgba(255,255,255,0.06)
+    title-card-clickable: false
+    title-card-button-overlay: false
