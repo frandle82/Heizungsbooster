@@ -94,6 +94,11 @@ function fmtSigned(x) {
   return sign + x.toFixed(1);
 }
 
+function fmtMinutes(x) {
+  if (!isFinite(x)) return "—";
+  return Math.max(0, Math.round(x));
+}
+
 function computeEffectiveRate(roomHistory, heaterHistory, fan) {
   if (roomHistory.length < 2) return NaN;
 
@@ -127,32 +132,29 @@ function updateETAUI(text, color) {
   }
 }
 
-function computeStatus(mode, delta, fan) {
-  if (mode === "off") return "Ausgeschaltet";
-  if (mode === "manual") return "Manueller Betrieb";
-
-  if (fan > 0 && delta < -1.5) return "Heizt stark";
-  if (fan > 0 && delta < -0.5) return "Heizt";
-  if (fan > 0 && delta >= -0.5) return "Hält Temperatur";
-  if (fan === 0 && delta >= 0) return "Ziel erreicht";
-  if (fan === 0 && delta < -0.5) return "Wartet auf Wärme";
-
-  return "Bereit";
+function formatModeLabel(mode) {
+  if (mode === "manual") return "Modus: MANUELL";
+  if (mode === "auto") return "Modus: AUTO";
+  return "Modus: AUS";
 }
 
 var tempHistory = [];
 var heaterHistory = [];
+var setpHistory = [];
+var fanHistory = [];
 
-function updateHistory(history, value, now, minDelta) {
+function updateHistory(history, value, now, minDelta, maxLen) {
   if (!isFinite(value)) return;
 
   if (history.length) {
     var last = history[history.length - 1];
-    if (Math.abs(value - last.v) < minDelta) return;
+    var stale = now - last.t > 45000;
+    if (Math.abs(value - last.v) < minDelta && !stale) return;
   }
 
   history.push({ t: now, v: value });
-  if (history.length > 10) history.shift();
+  var cap = maxLen || 30;
+  if (history.length > cap) history.shift();
 }
 
 function heaterIsRising(history) {
@@ -162,11 +164,145 @@ function heaterIsRising(history) {
   return last.v > prev.v;
 }
 
+function historyIsUnstable(tempHistory, fanHistory) {
+  var now = Date.now();
+  var unstableTemp = false;
+  var unstableFan = false;
+
+  for (var i = Math.max(1, tempHistory.length - 5); i < tempHistory.length; i++) {
+    var prevTemp = tempHistory[i - 1];
+    var currTemp = tempHistory[i];
+    if (currTemp.t - prevTemp.t < 120000 && Math.abs(currTemp.v - prevTemp.v) > 0.4) {
+      unstableTemp = true;
+      break;
+    }
+  }
+
+  for (var j = Math.max(1, fanHistory.length - 5); j < fanHistory.length; j++) {
+    var prevFan = fanHistory[j - 1];
+    var currFan = fanHistory[j];
+    if (currFan.t - prevFan.t < 120000 && Math.abs(currFan.v - prevFan.v) > 25) {
+      unstableFan = true;
+      break;
+    }
+  }
+
+  if (!tempHistory.length || now - tempHistory[tempHistory.length - 1].t > 240000) {
+    unstableTemp = true;
+  }
+
+  return unstableTemp || unstableFan;
+}
+
+function drawDiagChart() {
+  var canvas = $("diagChart");
+  if (!canvas) return;
+  var parent = canvas.parentElement;
+  if (!parent) return;
+
+  var width = parent.clientWidth;
+  var height = 140;
+  if (width <= 0) return;
+  var dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(width * dpr));
+  canvas.height = Math.max(1, Math.floor(height * dpr));
+  canvas.style.height = height + "px";
+
+  var ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  var allTemp = tempHistory.concat(setpHistory);
+  if (allTemp.length < 2 && fanHistory.length < 2) return;
+
+  var minT = Infinity;
+  var maxT = -Infinity;
+  for (var i = 0; i < allTemp.length; i++) {
+    minT = Math.min(minT, allTemp[i].v);
+    maxT = Math.max(maxT, allTemp[i].v);
+  }
+  if (!isFinite(minT) || !isFinite(maxT) || minT === maxT) {
+    minT = isFinite(minT) ? minT - 1 : 18;
+    maxT = isFinite(maxT) ? maxT + 1 : 24;
+  } else {
+    minT -= 0.5;
+    maxT += 0.5;
+  }
+
+  var startTime = Infinity;
+  var endTime = -Infinity;
+  var allHistories = [tempHistory, setpHistory, fanHistory];
+  for (var h = 0; h < allHistories.length; h++) {
+    var hist = allHistories[h];
+    if (!hist.length) continue;
+    startTime = Math.min(startTime, hist[0].t);
+    endTime = Math.max(endTime, hist[hist.length - 1].t);
+  }
+  if (!isFinite(startTime) || !isFinite(endTime)) return;
+  if (startTime === endTime) {
+    endTime = startTime + 60000;
+  }
+
+  var padding = 8;
+  var innerW = width - padding * 2;
+  var innerH = height - padding * 2;
+
+  function xFor(t) {
+    return padding + ((t - startTime) / (endTime - startTime)) * innerW;
+  }
+
+  function yForTemp(v) {
+    return padding + (1 - (v - minT) / (maxT - minT)) * innerH;
+  }
+
+  function yForFan(v) {
+    var clamped = clamp(v, 0, 100);
+    return padding + (1 - clamped / 100) * innerH;
+  }
+
+  ctx.strokeStyle = "rgba(255,255,255,.12)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padding, padding + innerH / 2);
+  ctx.lineTo(padding + innerW, padding + innerH / 2);
+  ctx.stroke();
+
+  function drawLine(history, color, yMap) {
+    if (!history.length) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (var i = 0; i < history.length; i++) {
+      var p = history[i];
+      var x = xFor(p.t);
+      var y = yMap(p.v);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    if (history.length === 1) {
+      var last = history[0];
+      ctx.lineTo(xFor(endTime), yMap(last.v));
+    }
+    ctx.stroke();
+    var lastPoint = history[history.length - 1];
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(xFor(lastPoint.t), yMap(lastPoint.v), 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  drawLine(tempHistory, "#4aa3ff", yForTemp);
+  drawLine(setpHistory, "#2ee59d", yForTemp);
+  drawLine(fanHistory, "#ffd166", yForFan);
+}
+
 /* ========= RENDER ========= */
 
 function render() {
   var now = Date.now();
   updateHistory(tempHistory, state.room, now, 0.05);
+  updateHistory(setpHistory, state.setp, now, 0.05);
+  updateHistory(fanHistory, state.fan, now, 1);
 
   var heaterValue = isFinite(state.heater) ? state.heater : state.proxy;
   updateHistory(heaterHistory, heaterValue, now, 0.1);
@@ -215,10 +351,9 @@ function render() {
     }
   }
 
-  // k-Faktor / Auswertung
-  var statusText = computeStatus(state.mode, delta, state.fan);
+
   var statusEl = $("statusText");
-  if (statusEl) statusEl.textContent = statusText;
+  if (statusEl) statusEl.textContent = formatModeLabel(state.mode);
 
   var statusCard = $("status");
   if (statusCard) {
@@ -245,50 +380,88 @@ function render() {
     var proxyDiff = isFinite(state.proxy) && isFinite(state.room) ? (state.proxy - state.room) : NaN;
     diagProxy.textContent = (isFinite(proxyDiff) ? fmtSigned(proxyDiff) : "—") + " °C";
   }
-  var diagFan = $("diagFan");
-  if (diagFan) diagFan.textContent = fmt0(state.fan) + " %";
   var diagState = $("diagState");
   if (diagState) diagState.textContent = state.ktxt;
 
-  // ETA
-  if (state.mode !== "auto" || !isFinite(delta) || delta >= 0) {
-    updateETAUI("", null);
-    return;
+  var statusDetails = [];
+  var hasTemp = isFinite(state.room) && isFinite(state.setp);
+  var hasFan = isFinite(state.fan);
+  var unstable = historyIsUnstable(tempHistory, fanHistory);   
+
+  if (hasTemp) {
+    statusDetails.push("Zieltemperatur: " + fmt1(state.setp) + " °C");
+  } else {
+    statusDetails.push("Zieltemperatur: —");
   }
 
-  var heaterTemp = heaterHistory.length ? heaterHistory[heaterHistory.length - 1].v : NaN;
-  var heaterRising = heaterIsRising(heaterHistory);
-  var proxyWarm = isFinite(state.proxy) && isFinite(state.room) && state.proxy > state.room + 0.8;
-
-  if (isFinite(heaterTemp) && heaterTemp < state.room) {
-    updateETAUI("", null);
-    return;
+  var etaText = "";
+  if (state.mode === "off") {
+    etaText = "Keine ETA berechenbar";
+  } else if (!hasTemp) {
+    etaText = "Keine ETA berechenbar";
+  } else if (unstable) {
+    etaText = "Warte auf stabile Messwerte";
+  } else if (state.mode !== "auto") {
+    etaText = "Keine ETA berechenbar";
+  } else if (!isFinite(delta) || delta >= -0.2) {
+    etaText = "Keine ETA berechenbar";
+  } else if (!hasFan || state.fan === 0) {
+    etaText = "Keine ETA berechenbar";
+  } else {
+    var heaterTemp = heaterHistory.length ? heaterHistory[heaterHistory.length - 1].v : NaN;
+    var heaterRising = heaterIsRising(heaterHistory);
+    var proxyWarm = isFinite(state.proxy) && isFinite(state.room) && state.proxy > state.room + 0.8;
+    if (isFinite(heaterTemp) && heaterTemp < state.room) {
+      etaText = "Keine ETA berechenbar";
+    } else if (!heaterRising && !proxyWarm) {
+      etaText = "Keine ETA berechenbar";
+    } else {
+      var effectiveRate = computeEffectiveRate(tempHistory, heaterHistory, state.fan);
+      if (isFinite(effectiveRate) && effectiveRate > 0) {
+        var etaMinutes = estimateETA(state.room, state.setp, effectiveRate);
+        if (isFinite(etaMinutes)) {
+          etaText = "Ziel voraussichtlich in ca. " + fmtMinutes(etaMinutes) + " Minuten erreicht";
+        } else {
+          etaText = "Keine ETA berechenbar";
+        }
+      } else {
+        etaText = "Keine ETA berechenbar";
+      }
+    }
   }
 
-  if (!heaterRising && !proxyWarm) {
-    updateETAUI("", null);
-    return;
+  var nextText = "";
+  if (state.mode === "off") {
+    nextText = "System deaktiviert – keine aktive Regelung";
+  } else if (!hasTemp || !hasFan) {
+    nextText = "Keine verlässliche Aussage möglich";
+  } else if (unstable) {
+    nextText = "Regelung passt sich aktuell an";
+  } else if (Math.abs(delta) < 0.2) {
+    nextText = "Temperatur im Zielbereich – stabil";
+  } else if (delta < -0.2) {
+    nextText = "Ziel wird weiter angefahren";
+  } else if (delta > 0.2) {
+    nextText = "Lüfterleistung wird als Nächstes reduziert";
+  } else {
+    nextText = "System stabil – keine Anpassung geplant";
   }
 
-  if (!isFinite(state.fan) || state.fan === 0) {
-    updateETAUI("", NaN, null);
-    return;
+  if (nextText) statusDetails.push(nextText);
+
+  var statusDetailsEl = $("statusDetails");
+  if (statusDetailsEl) {
+    statusDetailsEl.innerHTML = "";
+    for (var s = 0; s < statusDetails.length; s++) {
+      var line = document.createElement("div");
+      line.className = "status-line";
+      line.textContent = statusDetails[s];
+      statusDetailsEl.appendChild(line);
+    }
   }
 
-  var effectiveRate = computeEffectiveRate(tempHistory, heaterHistory, state.fan);
-  if (!isFinite(effectiveRate) || effectiveRate <= 0) {
-    updateETAUI("", NaN, null);
-    return;
-  }
-
-  var etaMinutes = estimateETA(state.room, state.setp, effectiveRate);
-  if (!isFinite(etaMinutes)) {
-    updateETAUI("", NaN, null);
-    return;
-  }
-
-  var etaText = "≈ " + Math.round(etaMinutes) + " min bis Ziel";
   updateETAUI(etaText, deltaColor(delta));
+  drawDiagChart();
 }
 
 /* ========= REST ========= */
@@ -418,12 +591,19 @@ function init() {
       if (isHidden) {
         diagPanel.removeAttribute("hidden");
         diagToggle.textContent = "▲";
+        window.requestAnimationFrame(drawDiagChart);
       } else {
         diagPanel.setAttribute("hidden", "");
         diagToggle.textContent = "▼";
       }
     });
   }
+
+  window.addEventListener("resize", function () {
+    if (diagPanel && !diagPanel.hasAttribute("hidden")) {
+      drawDiagChart();
+    }
+  });
 
   // Modus wechseln
   var btns = document.querySelectorAll(".segbtn");
