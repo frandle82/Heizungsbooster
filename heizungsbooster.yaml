@@ -234,6 +234,16 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+
+  - id: eta_last_temp
+    type: float
+    restore_value: no
+    initial_value: 'NAN'
+
+  - id: eta_last_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
   
 switch:
   - platform: restart
@@ -265,6 +275,9 @@ interval:
   - interval: ${tune_interval}
     then:
       - script.execute: autotune_plateau_caps
+  - interval: 60s
+    then:
+      - script.execute: update_eta
 
 text_sensor:
   - platform: template
@@ -377,6 +390,12 @@ sensor:
       if (isnan(h2)) return h1;
       return (h1 > h2) ? h1 : h2;
 
+  - platform: template
+    name: "ETA Zieltemperatur"
+    id: eta_target
+    unit_of_measurement: "min"
+    accuracy_decimals: 0
+    update_interval: never
 
 number:
   - platform: template
@@ -920,3 +939,52 @@ script:
           id(tune_base_Tr) = Tr;
           id(tune_base_delta) = delta;
           id(tune_base_speed) = (float)id(last_speed);
+
+  - id: update_eta
+    then:
+      - lambda: |-
+          if (!id(raum_temp).has_state() || !id(steuerung_temp).has_state()) return;
+
+          float Tr = id(raum_temp).state;
+          float Ts = id(steuerung_temp).state;
+          if (isnan(Tr) || isnan(Ts)) return;
+
+          uint32_t now = millis();
+          if (isnan(id(eta_last_temp)) || id(eta_last_ms) == 0) {
+            id(eta_last_temp) = Tr;
+            id(eta_last_ms) = now;
+            return;
+          }
+
+          uint32_t dt_ms = now - id(eta_last_ms);
+          if (dt_ms < 120000UL) return;
+
+          float dt_min = dt_ms / 60000.0f;
+          float rate = (Tr - id(eta_last_temp)) / dt_min;
+
+          id(eta_last_temp) = Tr;
+          id(eta_last_ms) = now;
+
+          if (!id(call_for_heat).state) {
+            id(eta_target).publish_state(NAN);
+            return;
+          }
+
+          if (Tr >= Ts) {
+            id(eta_target).publish_state(0);
+            return;
+          }
+
+          if (rate <= 0.01f) {
+            id(eta_target).publish_state(NAN);
+            return;
+          }
+
+          float remaining = (Ts - Tr) / rate;
+          if (remaining < 0.0f) remaining = 0.0f;
+          if (remaining > 1440.0f) {
+            id(eta_target).publish_state(NAN);
+            return;
+          }
+
+          id(eta_target).publish_state(remaining);
