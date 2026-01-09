@@ -32,7 +32,6 @@ substitutions:
   # -----------------------
   # Standardwerte (Initial Values)
   # -----------------------
-  initial_k_factor: "6.0"
   initial_deadband: "0.5"
   initial_fully_open_temp: "2.0"
   initial_temp_threshold: "3.0"                       # Temperaturdifferenz zwischen Heizung und Raum, ab der der Lüfter eingeschaltet wird (z.B. 3°C)
@@ -51,11 +50,6 @@ substitutions:
   morning_k_start: "5.5"          # Start-k für Warm-up
   morning_boost_minutes: "35"     # Dauer des aggressiveren Warm-ups
 
-  k_step_normal: "0.15"
-  k_step_morning: "0.70"
-  heat_rate_slow: "0.15"
-  heat_rate_fast: "0.45"
-
   # Kennlinie Heizbetrieb: ΔT-Stützpunkte (°C) und Speed (%)
   heat_dt0: "0.3"   # unterhalb davon: aus (kalt/ineffizient)
   heat_dt1: "0.8"
@@ -67,7 +61,7 @@ substitutions:
   heat_s1: "22"     # psycho LOW
   heat_s2: "38"     # MID
   heat_s3: "55"     # HIGH
-  heat_s4: "70"     # gedeckeltes MAX
+  heat_s4: "80"     # gedeckeltes MAX
 
   # Plateau/Abflachung ab Ts+dead: deutlich flacher (leiser)
   plat_dt1: "0.5"
@@ -78,24 +72,6 @@ substitutions:
   plat_s2: "38"
   plat_s3: "55"
 
-  tune_min_speed: "22.0"        # nur tunen, wenn Lüfter wirklich läuft
-  tune_delta_band: "0.3"        # ΔT muss stabil sein (±0.3K)
-  tune_room_gain_min: "0.05"    # Tr muss in 10 min mind. 0.05K steigen, sonst "bringt nichts"
-
-  tune_step_down: "0.03"
-  tune_step_up: "0.01"
-
-  plateau_cap_min: "0.30"
-  plateau_cap_max: "0.55"
-
-  afterrun_cap_min: "0.30"
-  afterrun_cap_max: "0.55"
-
-  # -----------------------
-  # Lern- & Regelparameter
-  # -----------------------
-  learn_dt_ms: "180000"          # 3 min Lernintervall (schneller wegen guter Zirkulation)
-
   plateau_delta_span: "3.0"      # ΔT-Spanne für Abflachung
   plateau_cap_factor: "0.55"     # max. Anteil von vmax im Plateau
   afterrun_cap_factor: "0.45"    # max. Anteil von vmax im Nachlauf
@@ -104,8 +80,6 @@ substitutions:
   # Timing
   # -----------------------
   automatik_interval: 20s       # Intervall für die automatische Steuerung (z.B. 10s)
-  lern_interval: 5min           # Intervall für die k-Steuerung (z.B. 5min)
-  tune_interval: 10min          # Auswertefenster
   sensor_update_interval: 9s    # Sollte etwas kürzer sein als automatik_interval
 
   # --------------------------------------------------------------------------------------------
@@ -150,16 +124,6 @@ web_server:
   log: false
 
 globals:
-  - id: current_state
-    type: int
-    restore_value: no
-    initial_value: '0'   # 0=idle,1=heating,2=transition,3=afterrun
-
-  - id: delta_char
-    type: float
-    restore_value: yes
-    initial_value: '3.5'   # Startwert für hohen Wohnraum
-
   - id: psycho_speed_filt
     type: float
     restore_value: no
@@ -169,51 +133,6 @@ globals:
     type: int
     restore_value: no
     initial_value: '0'
-
-  - id: k_dyn
-    type: float
-    restore_value: yes
-    initial_value: ${initial_k_factor}
-
-  - id: warmup_until_ms
-    type: uint32_t
-    restore_value: no
-    initial_value: '0'
-
-  - id: was_heating_request
-    type: bool
-    restore_value: no
-    initial_value: 'false'
-
-  - id: plateau_cap_dyn
-    type: float
-    restore_value: yes
-    initial_value: '0.55'   # Start: wohnzimmertauglich, P8 MAX effizient
-
-  - id: afterrun_cap_dyn
-    type: float
-    restore_value: yes
-    initial_value: '0.45'   # Start: leiser Nachlauf
-
-  - id: last_tune_ms
-    type: uint32_t
-    restore_value: no
-    initial_value: '0'
-
-  - id: tune_base_Tr
-    type: float
-    restore_value: no
-    initial_value: 'NAN'
-
-  - id: tune_base_delta
-    type: float
-    restore_value: no
-    initial_value: 'NAN'
-
-  - id: tune_base_speed
-    type: float
-    restore_value: no
-    initial_value: 'NAN'
 
   - id: fan_on_since
     type: uint32_t
@@ -225,25 +144,10 @@ globals:
     restore_value: no
     initial_value: '0'
 
-  - id: proxy_active_glob
-    type: bool
-    restore_value: no
-    initial_value: 'false'
-
   - id: proxy_on_glob
     type: bool
     restore_value: no
     initial_value: 'false'
-
-  - id: eta_last_temp
-    type: float
-    restore_value: no
-    initial_value: 'NAN'
-
-  - id: eta_last_ms
-    type: uint32_t
-    restore_value: no
-    initial_value: '0'
   
 switch:
   - platform: restart
@@ -269,23 +173,11 @@ interval:
   - interval: ${automatik_interval}
     then:
       - script.execute: automatik_steuerung
-  - interval: ${lern_interval}
-    then:
-      - script.execute: lernmodus_k_factor
-  - interval: ${tune_interval}
-    then:
-      - script.execute: autotune_plateau_caps
-  - interval: 60s
-    then:
-      - script.execute: update_eta
 
 text_sensor:
   - platform: template
     name: "Heizungsbooster Status"
     id: booster_state
-  - platform: template
-    name: "k-Faktor-Anpassung"
-    id: lernen
   - platform: template
     name: "Heizungsbooster Diagnose"
     id: booster_diag
@@ -302,11 +194,6 @@ binary_sensor:
     id: fenster_status
     on_state:
       - script.execute: automatik_steuerung
-
-  - platform: homeassistant
-    id: call_for_heat
-    entity_id: ${steuerung_temp_entity}
-    attribute: call_for_heat
 
 time:
   - platform: homeassistant
@@ -389,13 +276,6 @@ sensor:
       if (isnan(h1)) return h2;
       if (isnan(h2)) return h1;
       return (h1 > h2) ? h1 : h2;
-
-  - platform: template
-    name: "ETA Zieltemperatur"
-    id: eta_target
-    unit_of_measurement: "min"
-    accuracy_decimals: 0
-    update_interval: never
 
 number:
   - platform: template
@@ -536,7 +416,6 @@ script:
 
           if (id(fenster_status).state) {
             id(heizung_luefter).turn_off().perform();
-            id(current_state) = 0;
             id(booster_state).publish_state("Fenster offen");
             id(booster_diag).publish_state("OFF: window");
             return;
@@ -553,50 +432,19 @@ script:
           float Ts   = id(steuerung_temp).has_state() ? id(steuerung_temp).state : Tr;
           float dead = id(deadband_val).state;
           float hyst = id(temp_threshold).state;
+          float e = Ts - Tr;  // >0: unter Soll, <=0: am/über Soll
+          bool boost_allowed = (e >= 1.0f);
+          bool near_setpoint_1K = (e < 1.0f);
+          bool follow_setpoint_zone = (e > 0.05f && e <= 0.4f);
+          float follow_min_speed = 18.0f;
 
           /* =========================================================
-             VENTILLOGIK (2 HEIZKÖRPER) + PLAUSIBILITÄT
+             ZUSTÄNDE & DIFFERENZEN
           ========================================================= */
-          float vL = id(valve_left).has_state()  ? id(valve_left).state  : -1.0f;
-          float vR = id(valve_right).has_state() ? id(valve_right).state : -1.0f;
-
-          bool valve_valid =
-            id(valve_left).has_state() &&
-            id(valve_right).has_state() &&
-            (vL >= 0.0f && vL <= 100.0f) &&
-            (vR >= 0.0f && vR <= 100.0f);
-
-          if (!valve_valid) {
-            id(heizung_luefter).turn_off().perform();
-            id(current_state) = 0;
-            id(booster_state).publish_state("Ventil ungültig");
-            id(booster_diag).publish_state("FAULT: valve invalid");
-            return;
-          }
-
-          float valve_mean = 0.5f * (vL + vR);
-          bool valve_any_open = (vL > 10.0f) || (vR > 10.0f);
-
-          /* =========================================================
-             ZUSTÄNDE
-          ========================================================= */
-          bool heating_request = id(call_for_heat).state;
-
-          // "Maximal ausnutzen": wenn unter Soll -> mindestens LOW unterstützen (Failsafe)
-          bool under_setpoint = (Tr < Ts - dead);
-
-          // Plateau früher erlauben (ruhiger am Soll)
-          bool near_setpoint = (Tr >= (Ts - 0.5f * dead));
-
-          bool heating_active =
-            heating_request &&
-            valve_any_open &&
-            !near_setpoint;
-
-          bool plateau_ok =
-            heating_request &&
-            valve_any_open &&
-            near_setpoint;
+          bool above_setpoint = (Tr >= Ts + dead);
+          bool plateau_upper_ok = (Tr <= Ts + 0.2f);
+          bool heating_active = false;
+          bool plateau_ok = false;
 
           // Optional: hvac_action als zusätzliche Heizinformation
           bool hvac_reports_heat = false;
@@ -614,6 +462,11 @@ script:
           bool proxy_valid = id(heizung_surface).has_state() && !isnan(id(heizung_surface).state);
           float Tproxy = proxy_valid ? id(heizung_surface).state : NAN;
           float delta_proxy = proxy_valid ? (Tproxy - Tr) : NAN;
+          float delta_eff = std::max(Th - Tr, proxy_valid ? delta_proxy : -1000.0f);
+          bool usable_heat = (Th > Tr + dead + 0.8f) || (proxy_valid && (Tproxy > Tr + 0.8f));
+
+          heating_active = (Tr < Ts - dead) && usable_heat;
+          plateau_ok = (Tr >= Ts - dead) && plateau_upper_ok && usable_heat;
 
           float proxy_on_th, proxy_off_th;
           if (delta >= 3.0f)      { proxy_on_th = 0.6f; proxy_off_th = 0.4f; }
@@ -627,17 +480,20 @@ script:
             if (!proxy_valid || delta_proxy <= proxy_off_th) id(proxy_on_glob) = false;
           }
 
-          // Restwärme nur, wenn wirklich noch Konvektion erkennbar und kürzlich geheizt wurde
+          // Restwärme streng thermodynamisch (Proxy nicht verwenden)
           bool restwaerme =
-            !valve_any_open &&
             (Th > Tr + dead + hyst) &&
-            id(proxy_on_glob) &&
+            (Tr < Ts) &&
             (recently_heating || hvac_reports_heat);
+          
+          bool need_convective_help =
+            (Tr < Ts) &&
+            (Th > Tr + dead + 1.0f);
 
           /* =========================================================
              PARAMETER
           ========================================================= */
-          float k = std::clamp(id(k_dyn), (float)${k_min}, (float)${k_max});
+          const float k = 5.5f;
           float vmax = id(man_fan_speed).state;
 
           /* =========================================================
@@ -660,75 +516,98 @@ script:
           };
 
           /* =========================================================
-             LÜFTERBERECHNUNG
+            LÜFTERBERECHNUNG (kontinuierlich)
           ========================================================= */
-          int speed = 0;
+          float speed_cont = 0.0f;
+          const float min_tech_speed = 15.0f;
+          const float high_speed_cap = 55.0f;
+          const float comfort_soft_zone = 1.5f;
 
-          // 0) FAILSAFE: Wenn wirklich geheizt wird und Raum deutlich unter Soll ist -> mindestens LOW,
-          //    damit Wärme "vollständig" in den Raum gebracht wird.
-          if (heating_request && valve_any_open && under_setpoint && delta >= 0.5f) {
-            speed = 22;           // psycho LOW
-            id(current_state) = 1;
+          float kf = 0.9f + 0.35f * clamp01((k-${k_min})/(${k_max}-${k_min}));
+          float base_common = piecewise(std::max(0.0f, delta_eff)) * kf;
+
+          // Proxy dient ausschließlich als Freigabe für hohe Drehzahlen
+          bool high_speed_allowed = id(proxy_on_glob) && (e > 0.0f);
+          if (!high_speed_allowed && base_common > high_speed_cap) base_common = high_speed_cap;
+          if (proxy_valid && (delta_proxy < (proxy_on_th + 0.15f)) && base_common > high_speed_cap) {
+            base_common = high_speed_cap;
           }
+
+          float comfort = 0.0f;
+          if (e >= 0.0f) {
+            comfort = clamp01(e / comfort_soft_zone);
+          } else {
+            float overshoot = -e;
+            comfort = clamp01(1.0f - overshoot / 0.6f);
+            comfort = comfort * comfort;
+          }
+
+          const char *zone = above_setpoint ? "ABOVE" : "OFF";
 
           /* ---- 1) HEIZBETRIEB ---- */
           if (heating_active && delta >= 0.3f) {
-            id(current_state) = 1;
             id(last_heat_ms) = millis();
-
-            float base = piecewise(delta);
-
-            // Proxy beeinflusst: HIGH nur bei starkem Proxy (Effizienzschutz),
-            // aber LOW/MID sind erlaubt, damit es wirklich warm wird.
-            if (!id(proxy_on_glob) && base > 55.0f) base = 55.0f;  // HIGH nur mit Proxy
-
-            if (proxy_valid && (delta_proxy < (proxy_on_th + 0.15f)) && base > 55.0f) base = 55.0f;
-
-            // Ventilskalierung (Leistungsfreigabe)
-            float valve_scale = std::clamp(valve_mean / 100.0f, 0.3f, 1.0f);
-            base *= valve_scale;
-
-            // k wirkt nur weich
-            float kf = 0.9f + 0.35f * clamp01((k-${k_min})/(${k_max}-${k_min}));
-            base *= kf;
-
-            // Raum deutlich unter Soll -> Bandbreite stärker nutzen
-            if (Tr < Ts - 1.0f) {
-              base = std::min(base * 1.15f, 70.0f);
+            zone = "HEAT";
+            
+            float base = base_common;
+            if (near_setpoint_1K) {
+              base = std::min(base, 55.0f);
+            } else {
+              float t = clamp01((e - 1.0f) / 0.5f);
+              float boost_cap = 55.0f + t * (80.0f - 55.0f);
+              base = std::min(base, boost_cap);
             }
 
-            // Früher LOW-Boost
-            if (valve_any_open && delta < 0.8f) base = std::max(base, 22.0f);
+            if (boost_allowed && delta >= 3.5f) {
+              base = std::min(base * 1.20f, 80.0f);
+            }
 
-            // Falls FAILSAFE schon 22 gesetzt hat: nicht runterregeln
-            if (speed == 22) base = std::max(base, 22.0f);
-
-            speed = (int)roundf(std::clamp(base, 0.0f, 100.0f));
+            base *= comfort;
+            if (Tr > Ts + 0.2f) base = std::min(base, 22.0f * comfort);
+            if (e > 0.5f && base > 0.0f) base = std::max(base, min_tech_speed);
+            if (follow_setpoint_zone && usable_heat) {
+              base = std::clamp(std::max(base, follow_min_speed), follow_min_speed, 30.0f);
+            }
+            
+            speed_cont = std::clamp(base, 0.0f, 100.0f);
           }
 
           /* ---- 2) PLATEAU ---- */
           else if (plateau_ok && delta >= 0.3f) {
-            id(current_state) = 3;
+            zone = "PLAT";
 
-            float base = lerp(22.0f, 38.0f,
-              clamp01((delta - 0.5f) / ${plateau_delta_span})
-            );
+            float base = std::min(base_common * comfort, vmax * (float)${plateau_cap_factor});
+            if (Tr >= Ts) base = std::min(base, 22.0f * comfort);
+            if (follow_setpoint_zone && usable_heat) {
+              base = std::clamp(std::max(base, follow_min_speed), follow_min_speed, 30.0f);
+            }
 
-            base = std::min(base, vmax * id(plateau_cap_dyn));
-            speed = (int)roundf(base);
+            speed_cont = std::clamp(base, 0.0f, 100.0f);
           }
 
           /* ---- 3) NACHLAUF ---- */
           else if (restwaerme && delta >= 0.3f) {
-            id(current_state) = 3;
+            zone = "AFTR";
 
-            float rest = Th - (Tr + dead + hyst);
-            float rest_n = clamp01(rest / std::max(hyst, 0.1f));
+            float base = std::min(base_common * comfort, vmax * (float)${afterrun_cap_factor});
+            if (Tr >= Ts) base = std::min(base, 22.0f * comfort);
+            if (follow_setpoint_zone && usable_heat) {
+              base = std::clamp(std::max(base, follow_min_speed), follow_min_speed, 30.0f);
+            }
 
-            float base = lerp(22.0f, 38.0f, rest_n);
-            base = std::min(base, vmax * id(afterrun_cap_dyn));
+            speed_cont = std::clamp(base, 0.0f, 100.0f);
+          }
 
-            speed = (int)roundf(base);
+           /* ---- 4) KONVEKTIONS-STÜTZE ---- */
+          else if (need_convective_help) {
+            zone = "HELP";
+
+            float base = std::min(base_common * comfort, near_setpoint_1K ? 38.0f : 55.0f);
+            if (follow_setpoint_zone && usable_heat) {
+              base = std::clamp(std::max(base, follow_min_speed), follow_min_speed, 30.0f);
+            }
+
+            speed_cont = std::clamp(base, 0.0f, 100.0f);
           }
 
           /* ---- 4) AUS (mit Mindestlaufzeit) ---- */
@@ -737,18 +616,16 @@ script:
 
             if (id(last_speed) <= 0) {
               id(heizung_luefter).turn_off().perform();
-              id(current_state) = 0;
               id(booster_state).publish_state("Aus");
               id(booster_diag).publish_state("OFF");
               return;
             }
 
             if (now2 - id(fan_on_since) < 120000UL) {
-              speed = 22;
-              id(current_state) = 3;
+              if (Tr < Ts - 0.2f) speed_cont = 22.0f;
+              else speed_cont = 0.0f;
             } else {
               id(heizung_luefter).turn_off().perform();
-              id(current_state) = 0;
               id(booster_state).publish_state("Aus");
               id(booster_diag).publish_state("OFF");
               return;
@@ -766,25 +643,37 @@ script:
             return 70;
           };
 
-          const int RAMP_UP = 12;
-          const int RAMP_DOWN = 3;
-          const float ALPHA = 0.10f;
+          int ramp_up = boost_allowed ? 18 : 12;
+          int ramp_down = near_setpoint_1K ? 10 : 3;
+          float alpha = near_setpoint_1K ? 0.20f : 0.10f;
 
-          speed = quant(speed);
+          float speed_ramped = speed_cont;
+          float last_speed_f = id(psycho_speed_filt);
+
+          if (speed_ramped > last_speed_f)
+            speed_ramped = std::min(speed_ramped, last_speed_f + ramp_up);
+          else
+            speed_ramped = std::max(speed_ramped, last_speed_f - ramp_down);
+
+          id(psycho_speed_filt) =
+            id(psycho_speed_filt) * (1.0f - alpha) + speed_ramped * alpha;
+
+          if (speed_cont >= min_tech_speed && id(psycho_speed_filt) < min_tech_speed) {
+            id(psycho_speed_filt) = min_tech_speed;
+          }
+
+          int speed = (int)roundf(id(psycho_speed_filt));
+          if (follow_setpoint_zone && usable_heat) {
+            speed = (int)(roundf(speed / 5.0f) * 5.0f);
+          } else if (boost_allowed) {
+            speed = (int)(roundf(speed / 5.0f) * 5.0f);
+          } else {
+            speed = quant(speed);
+          }
 
           if (id(last_speed) <= 0 && speed > 0) {
             id(fan_on_since) = millis();
           }
-
-          if (speed > id(last_speed))
-            speed = std::min(speed, id(last_speed) + RAMP_UP);
-          else
-            speed = std::max(speed, id(last_speed) - RAMP_DOWN);
-
-          id(psycho_speed_filt) =
-            id(psycho_speed_filt) * (1.0f - ALPHA) + speed * ALPHA;
-
-          speed = (int)roundf(id(psycho_speed_filt));
 
           if (speed <= 0) {
             id(heizung_luefter).turn_off().perform();
@@ -797,10 +686,14 @@ script:
           /* =========================================================
              DIAGNOSE
           ========================================================= */
-          char buf[160];
+          float effective_share = speed_cont / 100.0f;
+          char buf[240];
           snprintf(buf, sizeof(buf),
-            "ΔT=%.1fK | Th=%.1f Tr=%.1f Ts=%.1f | V=%.0f/%.0f%% | proxy=%.1fK(%s) | k=%.2f%s | Fan=%d%%",
-            delta, Th, Tr, Ts, vL, vR,
+            "ΔT=%.1fK | Th=%.1f Tr=%.1f Ts=%.1f | e=%.2fK follow=%d fmin=%.0f boost=%d help=%d usable=%d ΔT_eff=%.1fK | Zone=%s | Komfort=%.2f | Anteil=%.2f | proxy=%.1fK(%s) | k=%.2f%s | Fan=%d%%",
+            delta, Th, Tr, Ts, e, follow_setpoint_zone ? 1 : 0, follow_min_speed, boost_allowed ? 1 : 0, need_convective_help ? 1 : 0, usable_heat ? 1 : 0, delta_eff,
+            zone,
+            comfort,
+            effective_share,
             (proxy_valid ? delta_proxy : NAN),
             (id(proxy_on_glob) ? "ON" : "OFF"),
             k, (k >= ${k_max}-0.1f ? " (SAT)" : ""),
@@ -808,183 +701,6 @@ script:
           );
           id(booster_diag).publish_state(buf);
 
-          id(booster_state).publish_state(
-            id(current_state)==1 ? "Heizen" :
-            id(current_state)==3 ? "Abflachung/Nachlauf" :
-            "Aus"
-          );
+          id(booster_state).publish_state(speed > 0 ? zone : "Aus");
 
-  # Lernmodus k-Faktor
-  - id: lernmodus_k_factor
-    then:
-      - lambda: |-
-          static float Tr_ref = NAN;
-          static uint32_t t_ref = 0;
-
-          if (id(fan_mode).current_option() != "auto") return;
-          if (!id(raum_temp).has_state() || !id(heizung_temp).has_state()) return;
-
-          float Tr = id(raum_temp).state;
-          float Th = id(heizung_temp).state;
-          float Ts = id(steuerung_temp).state;
-          float dead = id(deadband_val).state;
-
-          float vL = id(valve_left).has_state() ? id(valve_left).state : 0.0f;
-          float vR = id(valve_right).has_state() ? id(valve_right).state : 0.0f;
-          bool valve_any_open = (vL > 10.0f) || (vR > 10.0f);
-
-          if (!id(call_for_heat).state) return;
-          if (!valve_any_open) return;
-          if (Tr >= Ts + dead) return;
-          if (Th < Tr + 0.8f) return;
-
-          uint32_t now = millis();
-          if (isnan(Tr_ref)) {
-            Tr_ref = Tr;
-            t_ref = now;
-            return;
-          }
-
-          uint32_t dt = now - t_ref;
-          if (dt < 600000UL) return;
-
-          float dTr = Tr - Tr_ref;
-          float rate_10 = dTr * (600000.0f / dt);
-
-          float k = id(k_dyn);
-          float step = ${k_step_normal};
-
-          if (rate_10 < ${heat_rate_slow})
-            k = std::min((float)${k_max}, k + step);
-          else if (rate_10 > ${heat_rate_fast})
-            k = std::max((float)${k_min}, k - step);
-
-          id(k_dyn) = k;
-
-          Tr_ref = Tr;
-          t_ref = now;
-
-  # Autotune Plateau/Nachlauf Caps
-  - id: autotune_plateau_caps
-    then:
-      - lambda: |-
-          if (id(fan_mode).current_option() != "auto") return;
-          if (id(fenster_status).state) return;
-
-          if (!id(raum_temp).has_state() || !id(heizung_temp).has_state()) return;
-
-          float Tr = id(raum_temp).state;
-          float Th = id(heizung_temp).state;
-          if (isnan(Tr) || isnan(Th)) return;
-
-          float delta = Th - Tr;
-
-          float Ts = id(steuerung_temp).has_state() ? id(steuerung_temp).state : Tr;
-          float dead = id(deadband_val).state;
-          float hyst = id(temp_threshold).state;
-
-          float vL = id(valve_left).has_state() ? id(valve_left).state : 0.0f;
-          float vR = id(valve_right).has_state() ? id(valve_right).state : 0.0f;
-          bool valve_any_open = (vL > 10.0f) || (vR > 10.0f);
-
-          // nur tunen, wenn überhaupt Energiefluss möglich
-          if (!valve_any_open && (Th < Tr + 3.0f)) return;
-
-          bool in_plateau = (Tr >= Ts + dead) && (Th > (Tr + dead));
-          bool in_afterrun = (Th > (Tr + dead + hyst));
-
-          if (!in_plateau && !in_afterrun) {
-            id(tune_base_Tr) = Tr;
-            id(tune_base_delta) = delta;
-            id(tune_base_speed) = (float)id(last_speed);
-            return;
-          }
-
-          if ((float)id(last_speed) < (float)${tune_min_speed}) {
-            id(tune_base_Tr) = Tr;
-            id(tune_base_delta) = delta;
-            id(tune_base_speed) = (float)id(last_speed);
-            return;
-          }
-
-          if (isnan(id(tune_base_Tr)) || isnan(id(tune_base_delta)) || isnan(id(tune_base_speed))) {
-            id(tune_base_Tr) = Tr;
-            id(tune_base_delta) = delta;
-            id(tune_base_speed) = (float)id(last_speed);
-            return;
-          }
-
-          float d_delta = fabsf(delta - id(tune_base_delta));
-          if (d_delta > (float)${tune_delta_band}) {
-            id(tune_base_Tr) = Tr;
-            id(tune_base_delta) = delta;
-            id(tune_base_speed) = (float)id(last_speed);
-            return;
-          }
-
-          float dTr = Tr - id(tune_base_Tr);
-
-          if (dTr < (float)${tune_room_gain_min}) {
-            id(plateau_cap_dyn) = std::max((float)${plateau_cap_min},
-                                           id(plateau_cap_dyn) - (float)${tune_step_down});
-            id(afterrun_cap_dyn) = std::max((float)${afterrun_cap_min},
-                                            id(afterrun_cap_dyn) - (float)${tune_step_down});
-            id(lernen).publish_state("AutoTune: Caps ↓ (geringer Raumgewinn)");
-          } else {
-            id(plateau_cap_dyn) = std::min((float)${plateau_cap_max},
-                                           id(plateau_cap_dyn) + (float)${tune_step_up});
-            id(lernen).publish_state("AutoTune: PlateauCap ↑ (guter Raumgewinn)");
-          }
-
-          id(tune_base_Tr) = Tr;
-          id(tune_base_delta) = delta;
-          id(tune_base_speed) = (float)id(last_speed);
-
-  - id: update_eta
-    then:
-      - lambda: |-
-          if (!id(raum_temp).has_state() || !id(steuerung_temp).has_state()) return;
-
-          float Tr = id(raum_temp).state;
-          float Ts = id(steuerung_temp).state;
-          if (isnan(Tr) || isnan(Ts)) return;
-
-          uint32_t now = millis();
-          if (isnan(id(eta_last_temp)) || id(eta_last_ms) == 0) {
-            id(eta_last_temp) = Tr;
-            id(eta_last_ms) = now;
-            return;
-          }
-
-          uint32_t dt_ms = now - id(eta_last_ms);
-          if (dt_ms < 120000UL) return;
-
-          float dt_min = dt_ms / 60000.0f;
-          float rate = (Tr - id(eta_last_temp)) / dt_min;
-
-          id(eta_last_temp) = Tr;
-          id(eta_last_ms) = now;
-
-          if (!id(call_for_heat).state) {
-            id(eta_target).publish_state(NAN);
-            return;
-          }
-
-          if (Tr >= Ts) {
-            id(eta_target).publish_state(0);
-            return;
-          }
-
-          if (rate <= 0.01f) {
-            id(eta_target).publish_state(NAN);
-            return;
-          }
-
-          float remaining = (Ts - Tr) / rate;
-          if (remaining < 0.0f) remaining = 0.0f;
-          if (remaining > 1440.0f) {
-            id(eta_target).publish_state(NAN);
-            return;
-          }
-
-          id(eta_target).publish_state(remaining);
+ 
