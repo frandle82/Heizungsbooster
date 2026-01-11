@@ -51,15 +51,6 @@ substitutions:
   heat_s3: "55"     # HIGH
   heat_s4: "80"     # gedeckeltes MAX
 
-  # Plateau/Abflachung ab Ts+dead: deutlich flacher (leiser)
-  plat_dt1: "0.5"
-  plat_dt2: "2.0"
-  plat_dt3: "5.0"
-
-  plat_s1: "22"
-  plat_s2: "38"
-  plat_s3: "55"
-
   # -----------------------
   # Timing
   # -----------------------
