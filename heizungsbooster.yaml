@@ -32,8 +32,6 @@ substitutions:
   # -----------------------
   initial_deadband: "0.5"
   initial_fully_open_temp: "2.0"
-  initial_temp_threshold: "3.0"                       # Temperaturdifferenz zwischen Heizung und Raum, ab der der Lüfter eingeschaltet wird (z.B. 3°C)
-  initial_default_raum_temp: "21.0"                   # Fallback-Wert wenn kein Wert von HA oder DS18B20 verfügbar ist
   initial_man_fan_speed: "50.0"                       # Manuelle Lüftergeschwindigkeit (für MANUAL-Modus)
 
   #------------------------
@@ -179,10 +177,6 @@ binary_sensor:
     id: fenster_status
     on_state:
       - script.execute: automatik_steuerung
-
-time:
-  - platform: homeassistant
-    id: ha_time
 
 sensor:
   - platform: template
