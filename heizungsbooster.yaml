@@ -88,6 +88,11 @@ globals:
     type: uint32_t
     restore_value: no
     initial_value: '0'
+
+  - id: target_smooth
+    type: float
+    restore_value: no
+    initial_value: '0'
   
 switch:
   - platform: restart
@@ -117,7 +122,7 @@ interval:
 text_sensor:
   - platform: template
     name: "Heizungsbooster Status"
-    id: booster_state
+    id: booster_status
 
 binary_sensor:
   - platform: homeassistant
@@ -129,13 +134,6 @@ binary_sensor:
       - script.execute: automatik_steuerung
 
 sensor:
-  - platform: template
-    name: "Luefterleistung"
-    id: luefterleistung
-    unit_of_measurement: "%"
-    accuracy_decimals: 0
-    update_interval: never
-
   - platform: dht
     pin: GPIO23
     temperature:
@@ -223,6 +221,30 @@ number:
             id(automatik_steuerung).execute();
           }
 
+  - platform: template
+    name: "auto Speed Limit"
+    id: auto_speed_limit
+    min_value: 0.0
+    max_value: 100.0
+    step: 1.0
+    initial_value: 100.0
+    optimistic: true
+    restore_value: true
+    on_value:
+      - script.execute: automatik_steuerung
+
+  - platform: template
+    name: "auto Damping Factor"
+    id: auto_damping_factor
+    min_value: 0.5
+    max_value: 1.0
+    step: 0.05
+    initial_value: 1.0
+    optimistic: true
+    restore_value: true
+    on_value:
+      - script.execute: automatik_steuerung
+
 select:
   # Interner Select für Betriebsmodus
   - platform: template
@@ -270,7 +292,6 @@ script:
             auto call = id(heizung_luefter).turn_on();
             call.set_speed(speed_value);
             call.perform();
-            id(luefterleistung).publish_state(speed_value);
           }
 
   # Betriebsmodus wechseln: off -> manual -> auto -> off
@@ -313,7 +334,6 @@ script:
           if (id(fenster_status).state) {
             id(heizung_luefter).turn_off().perform();
             id(last_speed) = 0;
-            id(booster_state).publish_state("IDLE");
             return;
           }
           if (!id(raum_temp).has_state() || !id(heizung_temp).has_state() || !id(steuerung_temp).has_state()) return;
@@ -337,25 +357,19 @@ script:
           if (heat_available) {
             id(last_heat_ms) = now;
           }
-          float min_speed = 0.0f;
-          if (heat_available || after_run) {
-            if (radiator_delta > 6.0f) min_speed = 40.0f;
-            else if (radiator_delta > 4.0f) min_speed = 30.0f;
-            else if (radiator_delta > 2.0f) min_speed = 20.0f;
-          }
+          float min_speed = (heat_available || after_run)
+            ? std::clamp((radiator_delta - 2.0f) * 10.0f, 0.0f, 40.0f)
+            : 0.0f;
 
           float max_speed = 80.0f;
           if (e >= 1.0f) max_speed = 80.0f;
           else if (e > 0.0f) max_speed = 55.0f;
           else max_speed = 80.0f;
 
-          if (!after_run) {
-            if (slope > 0.06f) {
-              max_speed = max_speed * 0.60f;
-            } else if (slope > 0.03f) {
-              max_speed = max_speed * 0.80f;
-            }
+          if (!after_run && slope > 0.05f) {
+            max_speed = max_speed * 0.70f;
           }
+          max_speed = std::min(max_speed, (float)id(auto_speed_limit).state);
           if (heat_available || after_run) {
             max_speed = std::max(max_speed, min_speed);
           }
@@ -365,13 +379,16 @@ script:
           if (after_run) {
             target_speed = min_speed;
           }
+          target_speed = target_speed * (float)id(auto_damping_factor).state;
+          target_speed = std::clamp(target_speed, min_speed, max_speed);
+          id(target_smooth) = (id(target_smooth) * 0.75f) + (target_speed * 0.25f);
 
           int speed = 0;
           if (!heat_available && !after_run) {
             speed = 0;
           } else {
             float current = (float)id(last_speed);
-            float limited = std::clamp(target_speed, current - 5.0f, current + 5.0f);
+            float limited = std::clamp(id(target_smooth), current - 3.0f, current + 3.0f);
             speed = (int)roundf(limited);
             if (heat_available && speed < 1) speed = 1;
           }
@@ -382,13 +399,10 @@ script:
             id(heizung_luefter).turn_on().set_speed(speed).perform();
           }
           id(last_speed) = speed;
-          id(luefterleistung).publish_state(speed);
+          const char *state = heat_available ? "ACTIVE" : (after_run ? "AFTER_RUN" : "OFF");
+          char status[160];
+          snprintf(status, sizeof(status), "%s | Fan=%d%% | dRad=%.1fK | e=%.1fK | slope=%.3f | min=%.0f max=%.0f",
+            state, speed, radiator_delta, e, slope, min_speed, max_speed);
+          id(booster_status).publish_state(status);
 
-          if (heat_available) {
-            id(booster_state).publish_state("ACTIVE");
-          } else if (after_run) {
-            id(booster_state).publish_state("AFTER_RUN");
-          } else {
-            id(booster_state).publish_state("OFF");
-          }
-          ESP_LOGD("booster", "rad_d=%.2f e=%.2f slope=%.3f target=%.1f", radiator_delta, e, slope, target_speed);
+          ESP_LOGD("booster", "rad_d=%.2f e=%.2f slope=%.3f target=%.1f", radiator_delta, e, slope, id(target_smooth));
