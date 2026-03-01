@@ -16,7 +16,7 @@ substitutions:
   # -----------------------
   # Lüfter Konfiguration
   # -----------------------
-  pin_fan: GPIO13                                # Pin für Lüfter PWM Steuersignal
+  pin_fan: GPIO04                                # Pin für Lüfter PWM Steuersignal
   fan_pwm_frequency: 25000 Hz                    # 4-Pol PC-Lüfter: 25000Hz // 3-Pol Lüfter mit Mosfet Schaltung: 1000Hz (bei Problemen 500-3000Hz testen)
 
   # ---------------------------------
@@ -25,7 +25,7 @@ substitutions:
   heizung1_temp_entity: "climate.wohnzimmer_heizung_links"
   heizung2_temp_entity: "climate.wohnzimmer_heizung_rechts"
   steuerung_temp_entity: "climate.wohnzimmer"
-  raum_temp_entity: "sensor.wohnzimmer_temp_temperature"
+  raum_temp_entity: "sensor.wohnzimmer_luftqualitat_temperatur"
 
   # -----------------------
   # Standardwerte (Initial Values)
@@ -49,7 +49,7 @@ esphome:
   friendly_name: ${device_friendly_name}
 
 esp32:
-  board: nodemcu-32s
+  board: wemos_d1_mini32
   framework:
     type: arduino
 
@@ -93,7 +93,22 @@ globals:
     type: float
     restore_value: no
     initial_value: '0'
-  
+
+  - id: last_room_temp
+    type: float
+    restore_value: no
+    initial_value: 'NAN'
+
+  - id: last_room_temp_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  - id: room_temp_slope
+    type: float
+    restore_value: no
+    initial_value: '0'
+
 switch:
   - platform: restart
     name: Neustart
@@ -135,7 +150,7 @@ binary_sensor:
 
 sensor:
   - platform: dht
-    pin: GPIO23
+    pin: GPIO27
     temperature:
       name: "Heizung Konvektions-Proxy"
       id: heizung_surface
@@ -191,12 +206,6 @@ sensor:
       if (isnan(h1)) return h2;
       if (isnan(h2)) return h1;
       return (h1 > h2) ? h1 : h2;
-
-  - platform: homeassistant
-    name: "Temperatur_Slope"
-    entity_id: sensor.wohnzimmer_temperature_slope
-    id: temperatur_slope
-    internal: true
 
 number:
   # Manuelle Lüftergeschwindigkeit (für MANUAL-Modus)
@@ -350,10 +359,18 @@ script:
           bool recently_heating = (id(last_heat_ms) > 0) && ((now - id(last_heat_ms)) < (12u * 60u * 1000u));
           bool after_run = (!heat_available && recently_heating && radiator_delta >= 1.0f);
           
-          auto *temp_slope_sensor = id(temperatur_slope);
-          float slope =
-            (temp_slope_sensor->has_state() && !isnan(temp_slope_sensor->state)) ? temp_slope_sensor->state : 0.0f;
-          
+          float slope = id(room_temp_slope);
+          if (id(last_room_temp_ms) > 0 && now > id(last_room_temp_ms)) {
+            float dt_min = (now - id(last_room_temp_ms)) / 60000.0f;
+            if (dt_min >= 0.1f && !isnan(id(last_room_temp))) {
+              float raw_slope = (Tr - id(last_room_temp)) / dt_min;
+              slope = std::clamp(raw_slope, -1.0f, 1.0f);
+              id(room_temp_slope) = slope;
+            }
+          }
+          id(last_room_temp) = Tr;
+          id(last_room_temp_ms) = now;
+
           if (heat_available) {
             id(last_heat_ms) = now;
           }
