@@ -31,12 +31,13 @@ substitutions:
   # Standardwerte (Initial Values)
   # -----------------------
   initial_man_fan_speed: "50.0"                       # Manuelle Lüftergeschwindigkeit (für MANUAL-Modus)
+  initial_auto_curve_offset: "0.0"                    # Additiver Offset für AUTO-Lüfterkurve in Prozentpunkten
 
   # -----------------------
   # Timing
   # -----------------------
-  automatik_interval: 12s       # Intervall für die automatische Steuerung (z.B. 10s)
-  sensor_update_interval: 9s    # Sollte etwas kürzer sein als automatik_interval
+  automatik_interval: 6s        # Intervall für die automatische Steuerung (z.B. 10s)
+  sensor_update_interval: 5s    # Sollte etwas kürzer sein als automatik_interval
 
   # --------------------------------------------------------------------------------------------
   # --------------------------------------------------------------------------------------------
@@ -93,6 +94,11 @@ globals:
     type: float
     restore_value: no
     initial_value: '0'
+
+  - id: heizbetrieb_aktiv
+    type: bool
+    restore_value: no
+    initial_value: 'false'
 
   - id: last_room_temp
     type: float
@@ -242,13 +248,15 @@ number:
     on_value:
       - script.execute: automatik_steuerung
 
+  # Additiver Offset für die AUTO-Lüfterkurve (negativ = leiser, positiv = stärker)
   - platform: template
-    name: "auto Damping Factor"
-    id: auto_damping_factor
-    min_value: 0.5
-    max_value: 1.0
-    step: 0.05
-    initial_value: 1.0
+    name: "auto Kurven Offset"
+    id: auto_curve_offset
+    min_value: -20.0
+    max_value: 20.0
+    step: 1.0
+    mode: slider
+    initial_value: ${initial_auto_curve_offset}
     optimistic: true
     restore_value: true
     on_value:
@@ -343,21 +351,59 @@ script:
           if (id(fenster_status).state) {
             id(heizung_luefter).turn_off().perform();
             id(last_speed) = 0;
+            id(target_smooth) = 0.0f;
             return;
           }
-          if (!id(raum_temp).has_state() || !id(heizung_temp).has_state() || !id(steuerung_temp).has_state()) return;
+          if (!id(raum_temp).has_state() || !id(heizung_temp).has_state() || !id(steuerung_temp).has_state()) {
+            // Fail-safe: ohne valide Messwerte nicht weiterlaufen
+            if (id(last_speed) > 0) id(heizung_luefter).turn_off().perform();
+            id(last_speed) = 0;
+            id(target_smooth) = 0.0f;
+            id(heizbetrieb_aktiv) = false;
+            id(booster_status).publish_state("OFF | invalid sensor state");
+            return;
+          }
           
           float Tr = id(raum_temp).state;
           float Ts = id(steuerung_temp).state;
           float Trad = id(heizung_temp).state;
-          if (isnan(Tr) || isnan(Ts) || isnan(Trad)) return;
+          if (isnan(Tr) || isnan(Ts) || isnan(Trad)) {
+            // Fail-safe: NaN-Werte sicher behandeln
+            if (id(last_speed) > 0) id(heizung_luefter).turn_off().perform();
+            id(last_speed) = 0;
+            id(target_smooth) = 0.0f;
+            id(heizbetrieb_aktiv) = false;
+            id(booster_status).publish_state("OFF | NaN sensor value");
+            return;
+          }
 
           float e = Ts - Tr;
           float radiator_delta = Trad - Tr;
-          bool heat_available = (radiator_delta >= 2.0f);
+
           uint32_t now = millis();
-          bool recently_heating = (id(last_heat_ms) > 0) && ((now - id(last_heat_ms)) < (12u * 60u * 1000u));
-          bool after_run = (!heat_available && recently_heating && radiator_delta >= 1.0f);
+          // Der auto_curve_offset wirkt auch auf die On/Off-Schwellen:
+          // positiv = früher ein / später aus, negativ = später ein / früher aus.
+          float control_bias = std::clamp(id(auto_curve_offset).state / 25.0f, -0.8f, 0.8f);
+          float on_rad_threshold = std::clamp(3.0f - (control_bias * 1.0f), 1.8f, 4.2f);
+          float off_rad_threshold = std::clamp(1.8f - (control_bias * 0.8f), 0.8f, 3.0f);
+          if (off_rad_threshold >= on_rad_threshold) off_rad_threshold = on_rad_threshold - 0.3f;
+          float on_e_threshold = std::clamp(0.2f - (control_bias * 0.5f), -0.4f, 0.6f);
+          float off_e_threshold = std::clamp(-0.1f - (control_bias * 0.4f), -0.8f, 0.3f);
+
+          bool heat_on_condition = (radiator_delta >= on_rad_threshold) && (e >= on_e_threshold);
+          bool heat_off_condition = (radiator_delta < off_rad_threshold) || (e <= off_e_threshold);
+
+          if (heat_on_condition) {
+            id(heizbetrieb_aktiv) = true;
+          } else if (heat_off_condition) {
+            id(heizbetrieb_aktiv) = false;
+          }
+
+          bool heat_available = id(heizbetrieb_aktiv);
+          if (heat_available) id(last_heat_ms) = now;
+
+          bool recently_heating = (id(last_heat_ms) > 0) && ((now - id(last_heat_ms)) < (10u * 60u * 1000u));
+          bool after_run = (!heat_available && recently_heating && radiator_delta >= 1.0f && e > -0.4f);
           
           float slope = id(room_temp_slope);
           if (id(last_room_temp_ms) > 0 && now > id(last_room_temp_ms)) {
@@ -371,55 +417,55 @@ script:
           id(last_room_temp) = Tr;
           id(last_room_temp_ms) = now;
 
+          float target_speed = 0.0f;
           if (heat_available) {
-            id(last_heat_ms) = now;
-          }
-          float min_speed = (heat_available || after_run)
-            ? std::clamp((radiator_delta - 2.0f) * 10.0f, 0.0f, 40.0f)
-            : 0.0f;
+            float base_speed = 20.0f;
+            if (radiator_delta >= 8.0f) base_speed = 65.0f;
+            else if (radiator_delta >= 5.0f) base_speed = 50.0f;
+            else if (radiator_delta >= 3.0f) base_speed = 35.0f;
 
-          float max_speed = 80.0f;
-          if (e >= 1.0f) max_speed = 80.0f;
-          else if (e > 0.0f) max_speed = 55.0f;
-          else max_speed = 80.0f;
+            if (e >= 1.5f) base_speed += 15.0f;
+            else if (e >= 0.8f) base_speed += 10.0f;
+            else if (e >= 0.2f) base_speed += 5.0f;
 
-          if (!after_run && slope > 0.05f) {
-            max_speed = max_speed * 0.70f;
+            if (slope > 0.03f) base_speed -= 8.0f;
+
+            target_speed = std::clamp(base_speed, 20.0f, 75.0f);
+          } else if (after_run) {
+            target_speed = (radiator_delta >= 2.5f) ? 30.0f : 20.0f;
           }
-          max_speed = std::min(max_speed, (float)id(auto_speed_limit).state);
-          if (heat_available || after_run) {
-            max_speed = std::max(max_speed, min_speed);
+
+          if (target_speed > 0.0f) {
+            target_speed += id(auto_curve_offset).state;
+            target_speed = std::clamp(target_speed, 0.0f, 100.0f);
           }
-          float demand_speed = (heat_available && e > 0.0f) ? max_speed : 0.0f;
-          float target_speed = std::max(min_speed, demand_speed);
-          target_speed = std::clamp(target_speed, 0.0f, max_speed);
-          if (after_run) {
-            target_speed = min_speed;
-          }
-          target_speed = target_speed * (float)id(auto_damping_factor).state;
-          target_speed = std::clamp(target_speed, min_speed, max_speed);
-          id(target_smooth) = (id(target_smooth) * 0.75f) + (target_speed * 0.25f);
+
+          float speed_limit = (float)id(auto_speed_limit).state;
+          target_speed = std::min(target_speed, speed_limit);
+          id(target_smooth) = (id(target_smooth) * 0.65f) + (target_speed * 0.35f);
 
           int speed = 0;
           if (!heat_available && !after_run) {
             speed = 0;
           } else {
             float current = (float)id(last_speed);
-            float limited = std::clamp(id(target_smooth), current - 3.0f, current + 3.0f);
+            float limited = std::clamp(id(target_smooth), current - 8.0f, current + 8.0f);
             speed = (int)roundf(limited);
-            if (heat_available && speed < 1) speed = 1;
+            if (speed < 20) speed = 20;
           }
           
+          bool speed_changed = (speed != id(last_speed));
           if (speed <= 0) {
-            id(heizung_luefter).turn_off().perform();
-          } else {
+            if (id(last_speed) > 0) id(heizung_luefter).turn_off().perform();
+          } else if (speed_changed) {
             id(heizung_luefter).turn_on().set_speed(speed).perform();
           }
           id(last_speed) = speed;
           const char *state = heat_available ? "ACTIVE" : (after_run ? "AFTER_RUN" : "OFF");
-          char status[160];
-          snprintf(status, sizeof(status), "%s | Fan=%d%% | dRad=%.1fK | e=%.1fK | slope=%.3f | min=%.0f max=%.0f",
-            state, speed, radiator_delta, e, slope, min_speed, max_speed);
+          float curve_offset = id(auto_curve_offset).state;
+          char status[200];
+          snprintf(status, sizeof(status), "%s | Fan=%d%% | dRad=%.1fK | e=%.1fK | slope=%.3f | target=%.0f | off=%.0f",
+            state, speed, radiator_delta, e, slope, target_speed, curve_offset);
           id(booster_status).publish_state(status);
 
-          ESP_LOGD("booster", "rad_d=%.2f e=%.2f slope=%.3f target=%.1f", radiator_delta, e, slope, id(target_smooth));
+          ESP_LOGD("booster", "state=%s rad_d=%.2f e=%.2f slope=%.3f target=%.1f offset=%.1f speed=%d", state, radiator_delta, e, slope, target_speed, curve_offset, speed);
