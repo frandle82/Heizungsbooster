@@ -2,48 +2,48 @@ substitutions:
   # -----------------------
   # Geräte-Identifikation
   # -----------------------
-  device_name: heizungsbooster                   # Name des Geräts (z.B. "heizungsbooster")
-  device_friendly_name: Heizungsbooster          # Anzeige-Name des Geräts (z.B. "Heizungsbooster")  
+  device_name: heizungsbooster
+  device_friendly_name: Heizungsbooster
 
   # -----------------------
   # Sicherheit & Netzwerk
   # -----------------------
-  api_encryption_key: !secret api_encryption_key # API Encryption Key (z.B. "base64_encrypted_key_hier_eintragen==")
-  ota_password: !secret ota_password             # Passwort für den OTA Update (z.B. "InM2TlqVfJe4")
-  ap_ssid: ${device_name}_AP                     # SSID für den Access Point (z.B. "shys-heizungsbooster_AP")
-  ap_password: !secret ap_password               # Passwort für den Access Point (z.B. "InM2TlqVfJe4")
+  api_encryption_key: !secret api_encryption_key
+  ota_password: !secret ota_password
+  ap_ssid: ${device_name}_AP
+  ap_password: !secret ap_password
 
   # -----------------------
   # Lüfter Konfiguration
   # -----------------------
-  pin_fan: GPIO04                                # Pin für Lüfter PWM Steuersignal
-  fan_pwm_frequency: 25000 Hz                    # 4-Pol PC-Lüfter: 25000Hz // 3-Pol Lüfter mit Mosfet Schaltung: 1000Hz (bei Problemen 500-3000Hz testen)
+  pin_fan: GPIO04
+  fan_pwm_frequency: 25000 Hz
 
   # ---------------------------------
-  # Temperatur-Sensor Konfiguration
+  # Home Assistant Entitäten
   # ---------------------------------
+  climate_entity: "climate.wohnzimmer"
   heizung1_temp_entity: "climate.wohnzimmer_heizung_links"
   heizung2_temp_entity: "climate.wohnzimmer_heizung_rechts"
-  steuerung_temp_entity: "climate.wohnzimmer"
   raum_temp_entity: "sensor.wohnzimmer_luftqualitat_temperatur"
 
   # -----------------------
-  # Standardwerte (Initial Values)
+  # Initialwerte
   # -----------------------
-  initial_man_fan_speed: "50.0"                       # Manuelle Lüftergeschwindigkeit (für MANUAL-Modus)
-  initial_auto_curve_offset: "0.0"                    # Additiver Offset für AUTO-Lüfterkurve in Prozentpunkten
+  initial_man_fan_speed: "50.0"
+  initial_auto_speed_limit: "100.0"
+  initial_auto_min_fan_speed: "20.0"
+  initial_radiator_on_threshold: "3.0"
+  initial_radiator_off_threshold: "1.8"
+  initial_after_run_minutes: "6.0"
+  initial_need_on_threshold: "0.20"
+  initial_need_off_threshold: "-0.10"
 
   # -----------------------
   # Timing
   # -----------------------
-  automatik_interval: 6s        # Intervall für die automatische Steuerung (z.B. 10s)
-  sensor_update_interval: 5s    # Sollte etwas kürzer sein als automatik_interval
-
-  # --------------------------------------------------------------------------------------------
-  # --------------------------------------------------------------------------------------------
-  # Konfiguration ENDE
-  # --------------------------------------------------------------------------------------------
-  # --------------------------------------------------------------------------------------------
+  automatik_interval: 6s
+  sensor_update_interval: 5s
 
 esphome:
   name: ${device_name}
@@ -63,7 +63,7 @@ api:
 ota:
   - platform: esphome
     password: ${ota_password}
-  
+
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
@@ -95,25 +95,50 @@ globals:
     restore_value: no
     initial_value: '0'
 
-  - id: heizbetrieb_aktiv
+  - id: heat_active
     type: bool
     restore_value: no
     initial_value: 'false'
 
-  - id: last_room_temp
+  - id: after_run_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  - id: failsafe_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  - id: effective_room_temp_value
     type: float
     restore_value: no
     initial_value: 'NAN'
 
-  - id: last_room_temp_ms
-    type: uint32_t
+  - id: effective_target_temp_value
+    type: float
     restore_value: no
-    initial_value: '0'
+    initial_value: 'NAN'
 
-  - id: room_temp_slope
+  - id: effective_radiator_delta_value
+    type: float
+    restore_value: no
+    initial_value: 'NAN'
+
+  - id: effective_need_delta_value
+    type: float
+    restore_value: no
+    initial_value: 'NAN'
+
+  - id: effective_target_speed_value
     type: float
     restore_value: no
     initial_value: '0'
+
+  - id: room_source_label
+    type: std::string
+    restore_value: no
+    initial_value: '"none"'
 
 switch:
   - platform: restart
@@ -135,7 +160,6 @@ output:
     id: pwm_output
 
 interval:
-  # Automatik-Steuerung
   - interval: ${automatik_interval}
     then:
       - script.execute: automatik_steuerung
@@ -148,7 +172,7 @@ text_sensor:
 binary_sensor:
   - platform: homeassistant
     name: "Fenster Status"
-    entity_id: ${steuerung_temp_entity}
+    entity_id: ${climate_entity}
     attribute: window_open
     id: fenster_status
     on_state:
@@ -161,17 +185,14 @@ sensor:
       name: "Heizung Konvektions-Proxy"
       id: heizung_surface
       filters:
-        # DHT ist träge & verrauscht → starkes Glätten
         - sliding_window_moving_average:
             window_size: 5
             send_every: 1
-        # unrealistische Werte blockieren
         - lambda: |-
             if (x < 15.0 || x > 80.0) return NAN;
             return x;
     update_interval: 60s
-    
-  # Temperatur-Sensor Heizung1
+
   - platform: homeassistant
     name: "Heizkörper1 Temperatur"
     entity_id: ${heizung1_temp_entity}
@@ -179,7 +200,6 @@ sensor:
     internal: true
     id: heizung1_temp
 
-  # Temperatur-Sensor Heizung2
   - platform: homeassistant
     name: "Heizkörper2 Temperatur"
     entity_id: ${heizung2_temp_entity}
@@ -187,18 +207,25 @@ sensor:
     internal: true
     id: heizung2_temp
 
-  # eingestellte Raumtemperatur
   - platform: homeassistant
     name: "Solltemperatur"
-    entity_id: ${steuerung_temp_entity}
+    entity_id: ${climate_entity}
     attribute: temperature
-    id: steuerung_temp
+    internal: true
+    id: climate_target_temp
 
-  # Raumtemperatur-Sensor aus HA
   - platform: homeassistant
-    name: "Raumtemperatur"
+    name: "Raumtemperatur Climate"
+    entity_id: ${climate_entity}
+    attribute: current_temperature
+    internal: true
+    id: climate_room_temp
+
+  - platform: homeassistant
+    name: "Raumtemperatur Sensor"
     entity_id: ${raum_temp_entity}
-    id: raum_temp
+    internal: true
+    id: raum_temp_sensor
 
   - platform: template
     name: "Heizungstemperatur"
@@ -214,7 +241,6 @@ sensor:
       return (h1 > h2) ? h1 : h2;
 
 number:
-  # Manuelle Lüftergeschwindigkeit (für MANUAL-Modus)
   - platform: template
     name: "man Lueftergeschwindigkeit"
     id: man_fan_speed
@@ -226,13 +252,9 @@ number:
     restore_value: true
     on_value:
       - lambda: |-
-          std::string mode = id(fan_mode).current_option();
-          if (mode == "manual") {
-            // MANUAL: Auf manuelle Geschwindigkeit setzen
+          if (id(fan_mode).current_option() == "manual") {
             id(apply_man_fan_speed).execute();
-
-          } else if (mode == "auto") {
-            // AUTO: Automatik-Logik ausführen
+          } else if (id(fan_mode).current_option() == "auto") {
             id(automatik_steuerung).execute();
           }
 
@@ -242,32 +264,97 @@ number:
     min_value: 0.0
     max_value: 100.0
     step: 1.0
-    initial_value: 100.0
+    initial_value: ${initial_auto_speed_limit}
     optimistic: true
     restore_value: true
     on_value:
       - script.execute: automatik_steuerung
 
-  # Additiver Offset für die AUTO-Lüfterkurve (negativ = leiser, positiv = stärker)
   - platform: template
-    name: "auto Kurven Offset"
-    id: auto_curve_offset
-    min_value: -20.0
-    max_value: 20.0
+    name: "Auto Minimum Fan Speed"
+    id: auto_min_fan_speed
+    min_value: 0.0
+    max_value: 50.0
     step: 1.0
     mode: slider
-    initial_value: ${initial_auto_curve_offset}
+    initial_value: ${initial_auto_min_fan_speed}
     optimistic: true
     restore_value: true
+    on_value:
+      - script.execute: automatik_steuerung
+
+  - platform: template
+    name: "Radiator On Threshold"
+    id: radiator_on_threshold
+    min_value: 1.0
+    max_value: 8.0
+    step: 0.1
+    mode: box
+    initial_value: ${initial_radiator_on_threshold}
+    optimistic: true
+    restore_value: true
+    on_value:
+      - script.execute: automatik_steuerung
+
+  - platform: template
+    name: "Radiator Off Threshold"
+    id: radiator_off_threshold
+    min_value: 0.5
+    max_value: 6.0
+    step: 0.1
+    mode: box
+    initial_value: ${initial_radiator_off_threshold}
+    optimistic: true
+    restore_value: true
+    on_value:
+      - script.execute: automatik_steuerung
+
+  - platform: template
+    name: "Need On Threshold"
+    id: need_on_threshold
+    min_value: 0.0
+    max_value: 1.0
+    step: 0.05
+    mode: box
+    initial_value: ${initial_need_on_threshold}
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "K"
+    on_value:
+      - script.execute: automatik_steuerung
+
+  - platform: template
+    name: "Need Off Threshold"
+    id: need_off_threshold
+    min_value: -1.0
+    max_value: 0.5
+    step: 0.05
+    mode: box
+    initial_value: ${initial_need_off_threshold}
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "K"
+    on_value:
+      - script.execute: automatik_steuerung
+
+  - platform: template
+    name: "After Run Duration"
+    id: after_run_minutes
+    min_value: 1.0
+    max_value: 20.0
+    step: 1.0
+    mode: box
+    initial_value: ${initial_after_run_minutes}
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "min"
     on_value:
       - script.execute: automatik_steuerung
 
 select:
-  # Interner Select für Betriebsmodus
   - platform: template
     id: fan_mode
     name: "Betriebsmodus"
-    internal: false
     options:
       - "off"
       - "manual"
@@ -278,31 +365,26 @@ select:
     on_value:
       - lambda: |-
           std::string mode = id(fan_mode).current_option();
-
           if (mode == "off") {
-            // OFF: Lüfter ausschalten
-            auto call = id(heizung_luefter).turn_off();
-            call.perform();
-
+            id(last_speed) = 0;
+            id(target_smooth) = 0.0f;
+            id(heat_active) = false;
+            id(after_run_active) = false;
+            id(failsafe_active) = false;
+            id(heizung_luefter).turn_off().perform();
+            id(booster_status).publish_state("OFF | manual off");
           } else if (mode == "manual") {
-            // MANUAL: Auf manuelle Geschwindigkeit setzen
             id(apply_man_fan_speed).execute();
-
-          } else if (mode == "auto") {
-            // AUTO: Automatik-Logik ausführen
+          } else {
             id(automatik_steuerung).execute();
           }
 
 script:
-  # Lüftergeschwindigkeit vom Number in den Fan übernehmen (nur im MANUAL-Modus)
   - id: apply_man_fan_speed
     then:
       - lambda: |-
-          std::string mode = id(fan_mode).current_option();
-          if (mode != "manual") return;
-
-          int speed_value = (int)id(man_fan_speed).state;
-
+          if (id(fan_mode).current_option() != "manual") return;
+          const int speed_value = (int) id(man_fan_speed).state;
           if (speed_value < 1) {
             id(heizung_luefter).turn_off().perform();
           } else {
@@ -311,161 +393,176 @@ script:
             call.perform();
           }
 
-  # Betriebsmodus wechseln: off -> manual -> auto -> off
   - id: switch_mode
     then:
       - lambda: |-
           std::string current_mode = id(fan_mode).current_option();
           std::string new_mode;
-
           if (current_mode == "off") new_mode = "manual";
           else if (current_mode == "manual") new_mode = "auto";
           else new_mode = "off";
-
           id(fan_mode).publish_state(new_mode);
 
-  # Manuelle Geschwindigkeit in 25% Stufen ändern
   - id: adjust_manual_speed
     then:
       - lambda: |-
-          std::string mode = id(fan_mode).current_option();
-          if (mode != "manual") return;
-
+          if (id(fan_mode).current_option() != "manual") return;
           float current_speed = id(man_fan_speed).state;
           float new_speed;
-
-          if (current_speed < 12.5) new_speed = 25.0;
-          else if (current_speed < 37.5) new_speed = 50.0;
-          else if (current_speed < 62.5) new_speed = 75.0;
-          else if (current_speed < 87.5) new_speed = 100.0;
-          else new_speed = 0.0;
-
+          if (current_speed < 12.5f) new_speed = 25.0f;
+          else if (current_speed < 37.5f) new_speed = 50.0f;
+          else if (current_speed < 62.5f) new_speed = 75.0f;
+          else if (current_speed < 87.5f) new_speed = 100.0f;
+          else new_speed = 0.0f;
           id(man_fan_speed).publish_state(new_speed);
 
-  # Automatik-Steuerung
   - id: automatik_steuerung
     then:
       - lambda: |-
           if (id(fan_mode).current_option() != "auto") return;
 
-          if (id(fenster_status).state) {
+          id(failsafe_active) = false;
+          id(after_run_active) = false;
+
+          // 1) Fenster offen -> aus
+          const bool window_open = id(fenster_status).has_state() && id(fenster_status).state;
+          if (window_open) {
+            id(heat_active) = false;
+            id(target_smooth) = 0.0f;
+            id(last_speed) = 0;
             id(heizung_luefter).turn_off().perform();
-            id(last_speed) = 0;
-            id(target_smooth) = 0.0f;
-            return;
-          }
-          if (!id(raum_temp).has_state() || !id(heizung_temp).has_state() || !id(steuerung_temp).has_state()) {
-            // Fail-safe: ohne valide Messwerte nicht weiterlaufen
-            if (id(last_speed) > 0) id(heizung_luefter).turn_off().perform();
-            id(last_speed) = 0;
-            id(target_smooth) = 0.0f;
-            id(heizbetrieb_aktiv) = false;
-            id(booster_status).publish_state("OFF | invalid sensor state");
-            return;
-          }
-          
-          float Tr = id(raum_temp).state;
-          float Ts = id(steuerung_temp).state;
-          float Trad = id(heizung_temp).state;
-          if (isnan(Tr) || isnan(Ts) || isnan(Trad)) {
-            // Fail-safe: NaN-Werte sicher behandeln
-            if (id(last_speed) > 0) id(heizung_luefter).turn_off().perform();
-            id(last_speed) = 0;
-            id(target_smooth) = 0.0f;
-            id(heizbetrieb_aktiv) = false;
-            id(booster_status).publish_state("OFF | NaN sensor value");
+            id(booster_status).publish_state("WINDOW | fan off");
             return;
           }
 
-          float e = Ts - Tr;
-          float radiator_delta = Trad - Tr;
+          // 2) Eingangswerte ermitteln (Raumtemp: Sensor bevorzugt, sonst Climate-Attribut)
+          const bool has_target = id(climate_target_temp).has_state() && isfinite(id(climate_target_temp).state);
+          const bool has_radiator = id(heizung_temp).has_state() && isfinite(id(heizung_temp).state);
 
-          uint32_t now = millis();
-          // Der auto_curve_offset wirkt auch auf die On/Off-Schwellen:
-          // positiv = früher ein / später aus, negativ = später ein / früher aus.
-          float control_bias = std::clamp(id(auto_curve_offset).state / 25.0f, -0.8f, 0.8f);
-          float on_rad_threshold = std::clamp(3.0f - (control_bias * 1.0f), 1.8f, 4.2f);
-          float off_rad_threshold = std::clamp(1.8f - (control_bias * 0.8f), 0.8f, 3.0f);
-          if (off_rad_threshold >= on_rad_threshold) off_rad_threshold = on_rad_threshold - 0.3f;
-          float on_e_threshold = std::clamp(0.2f - (control_bias * 0.5f), -0.4f, 0.6f);
-          float off_e_threshold = std::clamp(-0.1f - (control_bias * 0.4f), -0.8f, 0.3f);
+          float room_temp = NAN;
+          if (id(raum_temp_sensor).has_state() && isfinite(id(raum_temp_sensor).state)) {
+            room_temp = id(raum_temp_sensor).state;
+            id(room_source_label) = "sensor";
+          } else if (id(climate_room_temp).has_state() && isfinite(id(climate_room_temp).state)) {
+            room_temp = id(climate_room_temp).state;
+            id(room_source_label) = "climate";
+          } else {
+            id(room_source_label) = "none";
+          }
 
-          bool heat_on_condition = (radiator_delta >= on_rad_threshold) && (e >= on_e_threshold);
-          bool heat_off_condition = (radiator_delta < off_rad_threshold) || (e <= off_e_threshold);
+          if (!has_target || !has_radiator || !isfinite(room_temp)) {
+            id(failsafe_active) = true;
+            id(heat_active) = false;
+            id(target_smooth) = 0.0f;
+            id(last_speed) = 0;
+            id(heizung_luefter).turn_off().perform();
+            id(booster_status).publish_state("FAILSAFE | missing sensor value");
+            return;
+          }
+
+          const float target_temp = id(climate_target_temp).state;
+          const float radiator_temp = id(heizung_temp).state;
+          const float radiator_delta = radiator_temp - room_temp;
+          const float need_delta = target_temp - room_temp;
+
+          id(effective_room_temp_value) = room_temp;
+          id(effective_target_temp_value) = target_temp;
+          id(effective_radiator_delta_value) = radiator_delta;
+          id(effective_need_delta_value) = need_delta;
+
+          // 3) Heat availability: reale Heizkörperwärme + Heizbedarf
+          const float rad_on = id(radiator_on_threshold).state;
+          const float rad_off = id(radiator_off_threshold).state;
+          const float need_on = id(need_on_threshold).state;
+          const float need_off = id(need_off_threshold).state;
+
+          const bool heat_on_condition = (radiator_delta >= rad_on) && (need_delta >= need_on);
+          const bool heat_off_condition = (radiator_delta <= rad_off) || (need_delta <= need_off);
 
           if (heat_on_condition) {
-            id(heizbetrieb_aktiv) = true;
+            id(heat_active) = true;
           } else if (heat_off_condition) {
-            id(heizbetrieb_aktiv) = false;
+            id(heat_active) = false;
           }
 
-          bool heat_available = id(heizbetrieb_aktiv);
-          if (heat_available) id(last_heat_ms) = now;
+          const uint32_t now = millis();
+          if (id(heat_active)) id(last_heat_ms) = now;
 
-          bool recently_heating = (id(last_heat_ms) > 0) && ((now - id(last_heat_ms)) < (10u * 60u * 1000u));
-          bool after_run = (!heat_available && recently_heating && radiator_delta >= 1.0f && e > -0.4f);
-          
-          float slope = id(room_temp_slope);
-          if (id(last_room_temp_ms) > 0 && now > id(last_room_temp_ms)) {
-            float dt_min = (now - id(last_room_temp_ms)) / 60000.0f;
-            if (dt_min >= 0.1f && !isnan(id(last_room_temp))) {
-              float raw_slope = (Tr - id(last_room_temp)) / dt_min;
-              slope = std::clamp(raw_slope, -1.0f, 1.0f);
-              id(room_temp_slope) = slope;
-            }
-          }
-          id(last_room_temp) = Tr;
-          id(last_room_temp_ms) = now;
+          // 4) Nachlauf nur kurz und nur bei noch vorhandener Restwärme
+          const uint32_t after_run_ms = (uint32_t) roundf(id(after_run_minutes).state * 60000.0f);
+          const bool recently_heating = (id(last_heat_ms) > 0) && ((now - id(last_heat_ms)) < after_run_ms);
+          const bool after_run = !id(heat_active)
+            && recently_heating
+            && (radiator_delta > rad_off)
+            && (need_delta > -0.4f);
+          id(after_run_active) = after_run;
 
+          // 5) Zielgeschwindigkeit aus realer Heizkörperwärme + kleinem Bedarf-Boost
+          const float min_auto_speed = id(auto_min_fan_speed).state;
           float target_speed = 0.0f;
-          if (heat_available) {
-            float base_speed = 20.0f;
-            if (radiator_delta >= 8.0f) base_speed = 65.0f;
-            else if (radiator_delta >= 5.0f) base_speed = 50.0f;
-            else if (radiator_delta >= 3.0f) base_speed = 35.0f;
+          if (id(heat_active)) {
+            float base_speed = min_auto_speed;
+            if (radiator_delta >= rad_on + 5.0f) base_speed = std::max(base_speed, 75.0f);
+            else if (radiator_delta >= rad_on + 3.0f) base_speed = std::max(base_speed, 58.0f);
+            else if (radiator_delta >= rad_on + 1.0f) base_speed = std::max(base_speed, 42.0f);
 
-            if (e >= 1.5f) base_speed += 15.0f;
-            else if (e >= 0.8f) base_speed += 10.0f;
-            else if (e >= 0.2f) base_speed += 5.0f;
+            if (need_delta >= 2.0f) base_speed += 18.0f;
+            else if (need_delta >= 1.2f) base_speed += 10.0f;
+            else if (need_delta >= 0.6f) base_speed += 5.0f;
 
-            if (slope > 0.03f) base_speed -= 8.0f;
-
-            target_speed = std::clamp(base_speed, 20.0f, 75.0f);
+            target_speed = std::clamp(base_speed, min_auto_speed, 100.0f);
           } else if (after_run) {
-            target_speed = (radiator_delta >= 2.5f) ? 30.0f : 20.0f;
+            target_speed = std::max(min_auto_speed, 25.0f);
           }
 
-          if (target_speed > 0.0f) {
-            target_speed += id(auto_curve_offset).state;
-            target_speed = std::clamp(target_speed, 0.0f, 100.0f);
-          }
-
-          float speed_limit = (float)id(auto_speed_limit).state;
-          target_speed = std::min(target_speed, speed_limit);
-          id(target_smooth) = (id(target_smooth) * 0.65f) + (target_speed * 0.35f);
+          target_speed = std::min(target_speed, id(auto_speed_limit).state);
+          id(target_smooth) = (id(target_smooth) * 0.70f) + (target_speed * 0.30f);
+          id(effective_target_speed_value) = id(target_smooth);
 
           int speed = 0;
-          if (!heat_available && !after_run) {
-            speed = 0;
-          } else {
-            float current = (float)id(last_speed);
-            float limited = std::clamp(id(target_smooth), current - 8.0f, current + 8.0f);
-            speed = (int)roundf(limited);
-            if (speed < 20) speed = 20;
+          if (id(heat_active) || after_run) {
+            const float limited = std::clamp(id(target_smooth), (float) id(last_speed) - 8.0f, (float) id(last_speed) + 8.0f);
+            speed = (int) roundf(limited);
+            if (speed > 0 && speed < min_auto_speed) speed = (int) roundf(min_auto_speed);
           }
-          
-          bool speed_changed = (speed != id(last_speed));
+
           if (speed <= 0) {
             if (id(last_speed) > 0) id(heizung_luefter).turn_off().perform();
-          } else if (speed_changed) {
-            id(heizung_luefter).turn_on().set_speed(speed).perform();
+          } else if (speed != id(last_speed)) {
+            auto call = id(heizung_luefter).turn_on();
+            call.set_speed(speed);
+            call.perform();
           }
           id(last_speed) = speed;
-          const char *state = heat_available ? "ACTIVE" : (after_run ? "AFTER_RUN" : "OFF");
-          float curve_offset = id(auto_curve_offset).state;
-          char status[200];
-          snprintf(status, sizeof(status), "%s | Fan=%d%% | dRad=%.1fK | e=%.1fK | slope=%.3f | target=%.0f | off=%.0f",
-            state, speed, radiator_delta, e, slope, target_speed, curve_offset);
+
+          const char *mode_label = id(failsafe_active) ? "FAILSAFE" : (id(heat_active) ? "ACTIVE" : (after_run ? "AFTER_RUN" : "OFF"));
+          char status[240];
+          snprintf(
+            status,
+            sizeof(status),
+            "%s | room=%s | fan=%d%% | dRad=%.1fK | dNeed=%.1fK | target=%.0f%%",
+            mode_label,
+            id(room_source_label).c_str(),
+            speed,
+            radiator_delta,
+            need_delta,
+            target_speed
+          );
           id(booster_status).publish_state(status);
 
-          ESP_LOGD("booster", "state=%s rad_d=%.2f e=%.2f slope=%.3f target=%.1f offset=%.1f speed=%d", state, radiator_delta, e, slope, target_speed, curve_offset, speed);
+          ESP_LOGD(
+            "booster",
+            "mode=%s room_src=%s room=%.2f target=%.2f rad=%.2f dRad=%.2f dNeed=%.2f heat=%d after=%d target=%.1f smooth=%.1f speed=%d",
+            mode_label,
+            id(room_source_label).c_str(),
+            room_temp,
+            target_temp,
+            radiator_temp,
+            radiator_delta,
+            need_delta,
+            id(heat_active),
+            after_run,
+            target_speed,
+            id(target_smooth),
+            speed
+          );
